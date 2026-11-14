@@ -1,8 +1,8 @@
 """
-Generación e inicialización automática de datasets sintéticos realistas
+Generacion e inicializacion automatica de datasets sinteticos realistas
 para el entrenamiento de los modelos ML del SistemaMultiagenteComercial.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -201,3 +201,4 @@ def inicializar_datasets(directorio_data: Path) -> Tuple[pd.DataFrame, pd.DataFr
     df_tarifas.to_csv(ruta_tarifas, index=False, encoding="utf-8")
     df_ofertas.to_csv(ruta_ofertas, index=False, encoding="utf-8")
     return df_tarifas, df_ofertas
+

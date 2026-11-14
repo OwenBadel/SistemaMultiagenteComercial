@@ -1,9 +1,9 @@
 """
-Estándar de mensajería FIPA-ACL sobre `spade.message.Message`.
-Configura explícitamente en metadata: performative, ontology="Comercial-SMA",
+Estandar de mensajeria FIPA-ACL sobre `spade.message.Message`.
+Configura explicitamente en metadata: performative, ontology="Comercial-SMA",
 protocol ("FIPA-Request", "FIPA-Propose", "FIPA-Query") y stereotype.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -130,3 +130,4 @@ def serializar_estructura_fipa_json(msg: Message, timestamp: str) -> Dict[str, A
         ":conversation-id": msg.get_metadata("conversation_id") or msg.thread,
         ":timestamp": timestamp,
     }
+

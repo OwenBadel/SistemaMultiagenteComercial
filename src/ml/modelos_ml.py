@@ -5,7 +5,7 @@ para los agentes con aprendizaje del SistemaMultiagenteComercial:
 - ModeloCotizacionesRF (RandomForestRegressor)
 - ModeloPromocionesKNN (StandardScaler + KNeighborsRegressor)
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -89,7 +89,10 @@ class ModeloNLPVentas:
             "caro", "costoso", "elevado", "presupuesto", "descuento",
             "promoción", "promocion", "rebaja", "indeciso", "duda",
             "pensar", "alto", "excede", "objecion", "objeción",
+            "muy caro", "no me alcanza",
         )
+
+        parametros = self._extraer_parametros_texto(texto_norm)
 
         if contexto_tipo in {"reclamo_critico_cliente", "reclamo_critico"} or any(
             p in texto_norm for p in palabras_hostiles
@@ -108,14 +111,20 @@ class ModeloNLPVentas:
         ):
             intencion = "objecion_precio"
             tono = "indeciso"
-            nivel_indecision = (
-                0.76
-                if "muy" in texto_norm or "demasiado" in texto_norm or "alto" in texto_norm
-                else 0.68
-            )
-        elif contexto_tipo == "parametros_servicio":
+            desc_solicitado = float(parametros.get("descuento_solicitado_cliente", 0.0))
+            if desc_solicitado >= 18.0 or any(
+                w in texto_norm for w in ("muy grande", "demasiado", "mitad", "20%", "25%", "30%")
+            ):
+                nivel_indecision = 0.96
+            else:
+                nivel_indecision = 0.72
+        elif contexto_tipo == "parametros_servicio" or any(
+            k in parametros for k in ("tipo_servicio", "horas_estimadas", "complejidad")
+        ) and any(
+            w in texto_norm for w in ("cotiz", "precio", "cuesta", "vale", "presupuesto", "horas", "complejidad")
+        ):
             intencion = "solicitud_cotizacion"
-            tono = "interesado" if tono_ml != "hostil" else "interesado"
+            tono = "interesado"
             nivel_indecision = 0.20
         elif contexto_tipo == "consulta_servicio":
             intencion = "consulta_servicio"
@@ -128,7 +137,6 @@ class ModeloNLPVentas:
                 0.72 if tono == "indeciso" else (0.90 if tono == "hostil" else 0.20)
             )
 
-        parametros = self._extraer_parametros_texto(texto_norm)
         return {
             "intencion": intencion,
             "tono_cliente": tono,
@@ -139,38 +147,48 @@ class ModeloNLPVentas:
 
     @staticmethod
     def _extraer_parametros_texto(texto_norm: str) -> Dict[str, Any]:
-        """Extrae posibles parámetros de servicio y fecha/hora desde texto libre."""
+        """Extrae posibles parametros de servicio, descuento solicitado y fecha/hora desde texto libre."""
         params: Dict[str, Any] = {}
         for clave_servicio in CATALOGO_SERVICIOS:
             if clave_servicio in texto_norm or clave_servicio.replace("_", " ") in texto_norm:
                 params["tipo_servicio"] = clave_servicio
                 break
         if "tipo_servicio" not in params:
-            if "web" in texto_norm or "página" in texto_norm or "pagina" in texto_norm:
+            if any(k in texto_norm for k in ("web", "página", "pagina", "sitio", "landing")):
                 params["tipo_servicio"] = "desarrollo_web"
-            elif "tienda" in texto_norm or "carrito" in texto_norm:
+            elif any(k in texto_norm for k in ("tienda", "carrito", "ecommerce", "e-commerce")):
                 params["tipo_servicio"] = "ecommerce"
-            elif "móvil" in texto_norm or "movil" in texto_norm or "app" in texto_norm:
+            elif any(k in texto_norm for k in ("móvil", "movil", "app", "android", "ios")):
                 params["tipo_servicio"] = "app_movil"
-            elif "automatiz" in texto_norm or "bot" in texto_norm or "ia" in texto_norm:
+            elif any(k in texto_norm for k in ("automatiz", "bot", "ia", "inteligencia artificial")):
                 params["tipo_servicio"] = "automatizacion_ia"
-            elif "cloud" in texto_norm or "nube" in texto_norm:
+            elif any(k in texto_norm for k in ("cloud", "nube", "devops", "servidor")):
                 params["tipo_servicio"] = "consultoria_cloud"
 
-        match_horas = re.search(r"(\d+)\s*horas?", texto_norm)
+        match_horas = re.search(r"(\d+)\s*(?:horas?|hrs?|h)\b", texto_norm)
         if match_horas:
             params["horas_estimadas"] = int(match_horas.group(1))
 
-        match_comp = re.search(r"complejidad\s*(\d)", texto_norm)
+        match_comp = re.search(r"complejidad\s*(?:de\s*)?(\d)", texto_norm)
         if match_comp:
             params["complejidad"] = int(match_comp.group(1))
+        elif "complejidad alta" in texto_norm or "alta complejidad" in texto_norm:
+            params["complejidad"] = 4
+        elif "complejidad media" in texto_norm or "media complejidad" in texto_norm:
+            params["complejidad"] = 3
+        elif "complejidad baja" in texto_norm or "baja complejidad" in texto_norm:
+            params["complejidad"] = 2
 
-        match_urg = re.search(r"urgencia\s*(\d+)\s*d[ií]as?", texto_norm)
+        match_urg = re.search(r"(?:urgencia|en|para)\s*(\d+)\s*d[ií]as?", texto_norm)
         if match_urg:
             params["urgencia_dias"] = int(match_urg.group(1))
 
         if "mantenimiento" in texto_norm or "soporte" in texto_norm:
             params["incluye_mantenimiento"] = 1
+
+        match_desc = re.search(r"(\d{1,2})\s*%", texto_norm)
+        if match_desc:
+            params["descuento_solicitado_cliente"] = float(match_desc.group(1))
 
         match_fecha = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", texto_norm)
         if match_fecha:

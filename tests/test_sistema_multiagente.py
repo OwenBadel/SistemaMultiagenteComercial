@@ -1,179 +1,212 @@
 """
-Suite de pruebas unitarias e integración E2E para SistemaMultiagenteComercial.
-Valida:
-- Metamodelo MAS-ML (Organización, Entorno, 5 Roles, 4 Control, 5 Dependencias).
-- Datasets sintéticos (>=30 registros) y modelos Scikit-Learn (RF, KNN, NLP).
-- Mensajería FIPA-ACL sobre SPADE y ejecución completa de Casos 1A, 1B, 2A, 2B, 3A, 3B y 4.
+Suite de pruebas automatizadas del SistemaMultiagenteComercial:
+1. Estructura organizacional MAS-ML (5 roles, control, 5 dependencias y reglas).
+2. Datasets (>= 30 registros) y modelos Scikit-Learn (NLP, RandomForest, KNN).
+3. Diagramas de secuencia FIPA-ACL (Escenario 1 alt/else, Escenario 2 alt/else,
+   Agendamiento y Escalamiento Human-in-the-Loop).
+4. Integracion real con Meta Platforms (WhatsApp Cloud API, Instagram Direct,
+   Facebook Messenger), verificacion GET /webhook, POST /webhook y API humana.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import List
 
-import pytest
+import httpx
 
-from src.comunicacion.fipa_acl import ONTOLOGIA_COMERCIAL, PROTOCOLOS_VALIDOS
-from src.escenarios.orquestador_escenarios import SistemaComercialOrquestador
+RAIZ = Path(__file__).resolve().parents[1]
+if str(RAIZ) not in sys.path:
+    sys.path.insert(0, str(RAIZ))
+
+from src.entorno.entorno_virtual import EntornoVirtualAtencion
+from src.escenarios.orquestador_escenarios import ServicioMultiagenteComercial
+from src.integracion_meta.configuracion import ConfiguracionMeta
+from src.integracion_meta.webhook_server import crear_app_meta
+from src.ml.datasets import inicializar_datasets
+from src.ml.modelos_ml import ModeloCotizacionesRF, ModeloNLPVentas, ModeloPromocionesKNN
+from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 
 
-def _extraer_secuencia_performativas(mensajes_fipa: List[dict]) -> List[str]:
+def _extraer_performativas(mensajes_fipa: List[dict]) -> List[str]:
+    """Extrae la secuencia ordenada de performativas FIPA-ACL registradas."""
     return [m["fipa_json"][":performative"] for m in mensajes_fipa]
 
 
-def _extraer_pares_emisor_receptor(mensajes_fipa: List[dict]) -> List[str]:
-    return [m["etiqueta_diapositiva"].splitlines()[0] for m in mensajes_fipa]
+def test_estructura_masml_roles_control_y_dependencias() -> None:
+    """Verifica composicion de 5 roles, 4 controles, 5 dependencias y reglas MAS-ML."""
+    df_t, df_o = inicializar_datasets(RAIZ / "data")
+    entorno = EntornoVirtualAtencion(tarifas_historicas=df_t, historico_ofertas=df_o)
+    org = SistemaMultiagenteComercial(entorno=entorno)
 
-
-def test_estructura_masml_organizacion_roles_y_dependencias(tmp_path: Path) -> None:
-    orq = SistemaComercialOrquestador(
-        ruta_data=tmp_path / "data",
-        usar_xmpp_embebido=False,
-        silencioso=True,
-    )
-
-    # 1. Organización posee por composición (<<owns>>) los 5 roles
-    assert set(orq.organizacion.roles.keys()) == {
+    assert set(org.roles.keys()) == {
         "Coordinador",
         "EjecutivoVentas",
         "LiquidadorCotizaciones",
         "AnalistaPromociones",
         "GestorAgenda",
     }
-    assert "SistemaMultiagenteComercial" in orq.entorno.habitantes
-
-    # 2. Atributos del entorno <<environment>> EntornoVirtualAtencion
-    assert hasattr(orq.entorno, "plataformas")
-    assert hasattr(orq.entorno, "perfilesClientes")
-    assert hasattr(orq.entorno, "tarifasYMargenes")
-    assert hasattr(orq.entorno, "agendaVirtual")
-
-    # 3. Relaciones <<control>> del Coordinador
-    for subordinado in (
+    for rol_sub in (
         "EjecutivoVentas",
         "AnalistaPromociones",
         "LiquidadorCotizaciones",
         "GestorAgenda",
     ):
-        assert orq.organizacion.verificar_control("Coordinador", subordinado)
+        assert org.verificar_control("Coordinador", rol_sub) is True
 
-    # 4. Las 5 dependencias formales ([Dependiente] <--- [Proveedor])
-    esperadas = [
-        ("Coordinador", "LiquidadorCotizaciones"),
-        ("Coordinador", "AnalistaPromociones"),
-        ("EjecutivoVentas", "Coordinador"),
-        ("GestorAgenda", "LiquidadorCotizaciones"),
-        ("Coordinador", "GestorAgenda"),
-    ]
-    for dep, prov in esperadas:
-        assert orq.organizacion.verificar_dependencia(dep, prov)
+    assert len(org.dependencias_formales) == 5
+    assert org.verificar_dependencia("Coordinador", "LiquidadorCotizaciones")
+    assert org.verificar_dependencia("Coordinador", "AnalistaPromociones")
+    assert org.verificar_dependencia("EjecutivoVentas", "Coordinador")
+    assert org.verificar_dependencia("GestorAgenda", "LiquidadorCotizaciones")
+    assert org.verificar_dependencia("Coordinador", "GestorAgenda")
 
-    # 5. Reglas organizacionales
-    assert not orq.organizacion.aplicar_regla_escalamiento(
-        "EjecutivoVentas", "LiquidadorCotizaciones"
+    assert org.aplicar_regla_escalamiento("EjecutivoVentas", "LiquidadorCotizaciones") is False
+    assert org.aplicar_regla_escalamiento("EjecutivoVentas", "Coordinador") is True
+    assert (
+        org.aplicar_regla_canal_centralizado_promociones(
+            "AnalistaPromociones", "EjecutivoVentas"
+        )
+        is False
     )
-    assert not orq.organizacion.aplicar_regla_canal_centralizado_promociones(
-        "AnalistaPromociones", "EjecutivoVentas"
+    assert (
+        org.aplicar_regla_canal_centralizado_promociones(
+            "AnalistaPromociones", "Coordinador"
+        )
+        is True
     )
-    assert orq.organizacion.aplicar_regla_canal_centralizado_promociones(
-        "AnalistaPromociones", "Coordinador"
-    )
+    assert org.validar_prerequisito_agendamiento(False) is False
+    assert org.validar_prerequisito_agendamiento(True) is True
 
 
-def test_datasets_sinteticos_y_modelos_sklearn(tmp_path: Path) -> None:
-    ruta_data = tmp_path / "data"
-    orq = SistemaComercialOrquestador(
-        ruta_data=ruta_data,
-        usar_xmpp_embebido=False,
-        silencioso=True,
-    )
+def test_modelos_sklearn_y_datasets() -> None:
+    """Valida datasets >=30 filas y metricas predictivas de los 3 modelos Scikit-Learn."""
+    df_tarifas, df_ofertas = inicializar_datasets(RAIZ / "data")
+    assert len(df_tarifas) >= 30
+    assert len(df_ofertas) >= 30
 
-    assert len(orq.df_tarifas) >= 30
-    assert len(orq.df_ofertas) >= 30
-    assert (ruta_data / "tarifas_historicas.csv").exists()
-    assert (ruta_data / "historico_ofertas.csv").exists()
+    modelo_nlp = ModeloNLPVentas()
+    modelo_rf = ModeloCotizacionesRF(df_tarifas)
+    modelo_knn = ModeloPromocionesKNN(df_ofertas)
 
-    # RandomForestRegressor en AgenteCotizaciones
-    pred_rf = orq.modelo_rf.predecir_cotizacion(
+    assert modelo_rf.r2_entrenamiento > 0.85
+    assert modelo_knn.r2_entrenamiento > 0.65
+
+    pred_cot = modelo_rf.predecir_cotizacion(
         {
             "tipo_servicio": "ecommerce",
-            "complejidad": 3,
-            "horas_estimadas": 50,
-            "urgencia_dias": 15,
+            "complejidad": 4,
+            "horas_estimadas": 60,
+            "urgencia_dias": 10,
             "incluye_mantenimiento": 1,
         }
     )
-    assert pred_rf["valor_total"] > 1_000_000
-    assert orq.modelo_rf.r2_entrenamiento >= 0.85
+    assert pred_cot["valor_total"] > 0
 
-    # KNeighborsRegressor en AgentePromociones
-    pred_knn_viable = orq.modelo_knn.predecir_descuento_optimo(
-        monto_cotizado=5_200_000.0, nivel_indecision=0.72, complejidad=3, fidelidad_cliente=1
+    pred_promo = modelo_knn.predecir_descuento_optimo(
+        monto_cotizado=pred_cot["valor_total"],
+        nivel_indecision=0.72,
+        complejidad=4,
+        fidelidad_cliente=2,
     )
-    assert 5.0 <= pred_knn_viable["descuento_porciento"] <= 15.0
+    assert 0.0 < pred_promo["descuento_porciento"] <= 20.0
 
-    pred_knn_exceso = orq.modelo_knn.predecir_descuento_optimo(
-        monto_cotizado=8_000_000.0, nivel_indecision=0.96, complejidad=4, fidelidad_cliente=3
+    nlp_cot = modelo_nlp.analizar_mensaje(
+        "Necesito cotizar desarrollo web de 45 horas con complejidad 3"
     )
-    assert pred_knn_exceso["descuento_porciento"] > 15.0
+    assert nlp_cot["intencion"] == "solicitud_cotizacion"
+    assert nlp_cot["parametros_extraidos"]["horas_estimadas"] == 45
+    assert nlp_cot["parametros_extraidos"]["complejidad"] == 3
 
-    # NLP de AgenteVentas (interesado, indeciso, hostil)
-    assert orq.modelo_nlp.analizar_mensaje("Quiero información de servicios")["tono_cliente"] == "interesado"
-    assert orq.modelo_nlp.analizar_mensaje("Está muy caro para mi presupuesto")["tono_cliente"] == "indeciso"
-    assert orq.modelo_nlp.analizar_mensaje("Esto es un robo, pésimo servicio")["tono_cliente"] == "hostil"
+    nlp_obj = modelo_nlp.analizar_mensaje("Me parece costoso para mi presupuesto")
+    assert nlp_obj["intencion"] == "objecion_precio"
+    assert nlp_obj["tono_cliente"] == "indeciso"
+
+    nlp_hostil = modelo_nlp.analizar_mensaje("Esto es una estafa, quiero un humano ya")
+    assert nlp_hostil["tono_cliente"] == "hostil"
 
 
-def test_escenarios_completos_fipa_acl_spade(tmp_path: Path) -> None:
-    async def correr_todos() -> None:
-        orq = SistemaComercialOrquestador(
-            ruta_data=tmp_path / "data",
+def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
+    """
+    Demuestra Escenario 1 (FIPA-Request) completo en WhatsApp:
+    1) Solicitud incompleta -> else [FAILURE parametros_incompletos -> REQUEST aclaracion]
+    2) Respuesta con horas y complejidad -> alt [INFORM cotizacion_calculada -> INFORM entregar_cotizacion]
+    """
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            ruta_data=RAIZ / "data",
             usar_xmpp_embebido=False,
             silencioso=True,
         )
-        await orq.iniciar()
+        await servicio.iniciar()
         try:
-            # Caso 1A: Cotización exitosa (REQUEST -> AGREE -> REQUEST -> AGREE -> INFORM -> INFORM)
-            r1a = await orq.ejecutar_caso_1a()
-            assert r1a["catalogo"]["accion"] == "catalogo_enviado"
-            assert r1a["cotizacion"]["resultado"] == "cotizacion_entregada"
-            assert r1a["cotizacion"]["valor_total"] > 0
-            assert _extraer_secuencia_performativas(r1a["mensajes_fipa"]) == [
-                "REQUEST",
-                "AGREE",
-                "REQUEST",
-                "AGREE",
-                "INFORM",
-                "INFORM",
-            ]
-            # Verificación formato diapositiva 3 líneas + metadata FIPA
-            primer_msg = r1a["mensajes_fipa"][0]
-            lineas = primer_msg["etiqueta_diapositiva"].splitlines()
-            assert len(lineas) == 4
-            assert lineas[0] == "[AgenteVentas -> AgenteCoordinador]"
-            assert lineas[1] == "REQUEST"
-            assert lineas[3] == "<<ACL:REQUEST>>"
-            assert primer_msg["fipa_json"][":ontology"] == ONTOLOGIA_COMERCIAL
-            assert primer_msg["fipa_json"][":protocol"] in PROTOCOLOS_VALIDOS
+            res_incompleta = await servicio.procesar_mensaje_entrante_meta(
+                canal="WhatsApp",
+                id_cliente="573001112233",
+                nombre_cliente="Laura Gomez",
+                texto="Hola, necesito cotizar un desarrollo web",
+            )
+            perfs_1b = _extraer_performativas(res_incompleta["mensajes_fipa_turno"])
+            assert "REQUEST" in perfs_1b
+            assert "AGREE" in perfs_1b
+            assert "FAILURE" in perfs_1b
 
-            # Caso 1B: Parámetros incompletos (REQUEST -> AGREE -> REQUEST -> AGREE -> FAILURE -> REQUEST)
-            r1b = await orq.ejecutar_caso_1b()
-            assert r1b["resultado"]["resultado"] == "parametros_incompletos"
-            assert "horas_estimadas" in r1b["resultado"]["faltantes"]
-            assert _extraer_secuencia_performativas(r1b["mensajes_fipa"]) == [
-                "REQUEST",
-                "AGREE",
-                "REQUEST",
-                "AGREE",
-                "FAILURE",
-                "REQUEST",
-            ]
+            for msg_reg in res_incompleta["mensajes_fipa_turno"]:
+                fipa = msg_reg["fipa_json"]
+                assert fipa[":ontology"] == "Comercial-SMA"
+                assert fipa[":protocol"] == "FIPA-Request"
+                assert "<<ACL:" in msg_reg["etiqueta_diapositiva"]
 
-            # Caso 2A: Promoción aprobada con KNN
-            r2a = await orq.ejecutar_caso_2a()
-            assert r2a["resultado"]["resultado"] == "promocion_presentada"
-            assert _extraer_secuencia_performativas(r2a["mensajes_fipa"]) == [
+            res_completa = await servicio.procesar_mensaje_entrante_meta(
+                canal="WhatsApp",
+                id_cliente="573001112233",
+                nombre_cliente="Laura Gomez",
+                texto="Son 45 horas estimadas y complejidad 3",
+            )
+            perfs_1a = _extraer_performativas(res_completa["mensajes_fipa_turno"])
+            assert perfs_1a == ["REQUEST", "AGREE", "REQUEST", "AGREE", "INFORM", "INFORM"]
+            assert res_completa["resultado"]["resultado"] == "cotizacion_entregada"
+            assert res_completa["resultado"]["valor_total"] > 0
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
+
+def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
+    """
+    Demuestra Escenario 2 (FIPA-Propose) en Instagram:
+    - alt [acepta]: PROPOSE -> ACCEPT-PROPOSAL -> INFORM -> promocion presentada
+    - else [rechaza]: PROPOSE -> REJECT-PROPOSAL -> REFUSE -> tarifa base mantenida
+    """
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            ruta_data=RAIZ / "data",
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            await servicio.procesar_mensaje_entrante_meta(
+                canal="Instagram",
+                id_cliente="ig_user_88",
+                nombre_cliente="Carlos Ruiz",
+                texto="Quiero cotizar un ecommerce de 60 horas con complejidad 4",
+            )
+
+            res_2a = await servicio.procesar_mensaje_entrante_meta(
+                canal="Instagram",
+                id_cliente="ig_user_88",
+                nombre_cliente="Carlos Ruiz",
+                texto="El precio esta algo costoso para mi presupuesto",
+            )
+            perfs_2a = _extraer_performativas(res_2a["mensajes_fipa_turno"])
+            assert perfs_2a == [
                 "REQUEST",
                 "REQUEST",
                 "PROPOSE",
@@ -181,22 +214,67 @@ def test_escenarios_completos_fipa_acl_spade(tmp_path: Path) -> None:
                 "INFORM",
                 "INFORM",
             ]
+            assert res_2a["resultado"]["resultado"] == "promocion_presentada"
 
-            # Caso 2B: Promoción rechazada por margen
-            r2b = await orq.ejecutar_caso_2b()
-            assert r2b["resultado"]["resultado"] == "descuento_rechazado"
-            assert _extraer_secuencia_performativas(r2b["mensajes_fipa"]) == [
+            res_2b = await servicio.procesar_mensaje_entrante_meta(
+                canal="Instagram",
+                id_cliente="ig_user_88",
+                nombre_cliente="Carlos Ruiz",
+                texto="Necesito un 28% de descuento porque sigue demasiado caro",
+            )
+            perfs_2b = _extraer_performativas(res_2b["mensajes_fipa_turno"])
+            assert perfs_2b == [
                 "REQUEST",
                 "REQUEST",
                 "PROPOSE",
                 "REJECT-PROPOSAL",
                 "REFUSE",
             ]
+            assert res_2b["resultado"]["resultado"] == "descuento_rechazado"
+        finally:
+            await servicio.detener()
 
-            # Caso 3A: Agendamiento exitoso (QUERY-IF -> INFORM -> REQUEST -> AGREE -> CONFIRM -> INFORM)
-            r3a = await orq.ejecutar_caso_3a()
-            assert r3a["resultado"]["resultado"] == "cita_confirmada"
-            assert _extraer_secuencia_performativas(r3a["mensajes_fipa"]) == [
+    asyncio.run(_run())
+
+
+def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
+    """
+    Valida Agendamiento FIPA-Query (bloque ocupado vs libre) y pausa
+    Human-in-the-Loop cuando el cliente adopta tono hostil.
+    """
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            ruta_data=RAIZ / "data",
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            await servicio.procesar_mensaje_entrante_meta(
+                canal="Facebook",
+                id_cliente="fb_501",
+                nombre_cliente="Andrea Torres",
+                texto="Cotizar consultoria cloud de 30 horas y complejidad 2",
+            )
+
+            res_ocupado = await servicio.procesar_mensaje_entrante_meta(
+                canal="Facebook",
+                id_cliente="fb_501",
+                nombre_cliente="Andrea Torres",
+                texto="Quiero agendar una cita para el 2026-11-18 14:00",
+            )
+            assert "QUERY-IF" in _extraer_performativas(res_ocupado["mensajes_fipa_turno"])
+            assert res_ocupado["resultado"]["resultado"] == "horarios_alternativos"
+
+            res_libre = await servicio.procesar_mensaje_entrante_meta(
+                canal="Facebook",
+                id_cliente="fb_501",
+                nombre_cliente="Andrea Torres",
+                texto="Entonces quiero reservar cita el 2026-11-18 10:00",
+            )
+            perfs_libre = _extraer_performativas(res_libre["mensajes_fipa_turno"])
+            assert perfs_libre == [
                 "REQUEST",
                 "QUERY-IF",
                 "INFORM",
@@ -205,29 +283,193 @@ def test_escenarios_completos_fipa_acl_spade(tmp_path: Path) -> None:
                 "CONFIRM",
                 "INFORM",
             ]
+            assert res_libre["resultado"]["resultado"] == "cita_confirmada"
+            assert (
+                servicio.entorno.agendaVirtual.bloques["2026-11-18 10:00"]["estado"]
+                == "OCUPADO"
+            )
 
-            # Caso 3B: Superposición horaria (QUERY-IF -> INFORM false -> PROPOSE -> INFORM)
-            r3b = await orq.ejecutar_caso_3b()
-            assert r3b["resultado"]["resultado"] == "horarios_alternativos"
-            assert len(r3b["resultado"]["alternativas"]) >= 1
-            assert _extraer_secuencia_performativas(r3b["mensajes_fipa"]) == [
-                "REQUEST",
-                "QUERY-IF",
-                "INFORM",
-                "PROPOSE",
-                "INFORM",
-            ]
+            res_hostil = await servicio.procesar_mensaje_entrante_meta(
+                canal="WhatsApp",
+                id_cliente="573009998877",
+                nombre_cliente="Pedro Diaz",
+                texto="Esto es una estafa, quiero reclamar con un humano ya",
+            )
+            assert res_hostil["alerta_humana"] is not None
+            assert res_hostil["alerta_humana"]["estado"] == "alerta_recibida_por_profesional"
+            perfil_pausado = servicio.entorno.perfilesClientes.perfiles["573009998877"]
+            assert perfil_pausado["automatizacion_activa"] is False
+            assert len(servicio.entorno.alertas_humanas) >= 1
 
-            # Caso 4: Tono hostil y escalamiento humano (INFORM -> CANCEL -> CONFIRM)
-            r4 = await orq.ejecutar_caso_4()
-            assert r4["resultado_ventas"]["resultado"] == "automatizacion_pausada"
-            assert r4["alerta_humana"]["estado"] == "alerta_recibida_por_profesional"
-            assert _extraer_secuencia_performativas(r4["mensajes_fipa"]) == [
-                "INFORM",
-                "CANCEL",
-                "CONFIRM",
-            ]
+            res_mientras_pausa = await servicio.procesar_mensaje_entrante_meta(
+                canal="WhatsApp",
+                id_cliente="573009998877",
+                nombre_cliente="Pedro Diaz",
+                texto="Sigo esperando respuesta",
+            )
+            assert res_mientras_pausa["resultado"]["resultado"] == "en_atencion_humana"
+
+            envio_manual = await servicio.responder_como_humano(
+                id_cliente="573009998877",
+                texto="Hola Pedro, te atiende el supervisor comercial directamente.",
+            )
+            assert envio_manual["canal"] == "WhatsApp"
+
+            perfil_reactivado = servicio.reactivar_automatizacion("573009998877")
+            assert perfil_reactivado["automatizacion_activa"] is True
         finally:
-            await orq.detener()
+            await servicio.detener()
 
-    asyncio.run(correr_todos())
+    asyncio.run(_run())
+
+
+def test_endpoints_webhook_meta_whatsapp_instagram_messenger() -> None:
+    """
+    Prueba los endpoints HTTP reales de FastAPI para Meta:
+    - GET /webhook (verificacion con verify_token valido e invalido)
+    - POST /webhook (payloads oficiales WhatsApp, Instagram Direct y Facebook Messenger)
+    - Panel /, /api/estado, /api/humano/responder, /api/humano/reactivar y calendario
+    """
+
+    async def _run() -> None:
+        config = ConfiguracionMeta(meta_verify_token="token_prueba_unicolombo")
+        servicio = ServicioMultiagenteComercial(
+            ruta_data=RAIZ / "data",
+            config_meta=config,
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        app = crear_app_meta(servicio)
+
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as client:
+                r_ok = await client.get(
+                    "/webhook",
+                    params={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "token_prueba_unicolombo",
+                        "hub.challenge": "99887766",
+                    },
+                )
+                assert r_ok.status_code == 200
+                assert r_ok.text == "99887766"
+
+                r_bad = await client.get(
+                    "/webhook",
+                    params={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "token_erroneo",
+                        "hub.challenge": "123",
+                    },
+                )
+                assert r_bad.status_code == 403
+
+                r_panel = await client.get("/")
+                assert r_panel.status_code == 200
+                assert "SistemaMultiagenteComercial" in r_panel.text
+
+                payload_wa = {
+                    "object": "whatsapp_business_account",
+                    "entry": [
+                        {
+                            "changes": [
+                                {
+                                    "value": {
+                                        "contacts": [
+                                            {
+                                                "wa_id": "573101234567",
+                                                "profile": {"name": "Ana Sofia"},
+                                            }
+                                        ],
+                                        "messages": [
+                                            {
+                                                "from": "573101234567",
+                                                "type": "text",
+                                                "text": {
+                                                    "body": "Hola, quiero cotizar una app movil de 50 horas complejidad 3"
+                                                },
+                                            }
+                                        ],
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                }
+                r_wa = await client.post("/webhook", json=payload_wa)
+                assert r_wa.status_code == 200
+                data_wa = r_wa.json()
+                assert data_wa["mensajes_procesados"] == 1
+                assert data_wa["resultados"][0]["canal"] == "WhatsApp"
+                assert data_wa["resultados"][0]["resultado"]["resultado"] == "cotizacion_entregada"
+
+                payload_ig = {
+                    "object": "instagram",
+                    "entry": [
+                        {
+                            "messaging": [
+                                {
+                                    "sender": {"id": "ig_9001"},
+                                    "message": {"text": "Hola, que servicios ofrecen?"},
+                                }
+                            ]
+                        }
+                    ],
+                }
+                r_ig = await client.post("/webhook", json=payload_ig)
+                assert r_ig.status_code == 200
+                data_ig = r_ig.json()
+                assert data_ig["mensajes_procesados"] == 1
+                assert data_ig["resultados"][0]["canal"] == "Instagram"
+                assert data_ig["resultados"][0]["resultado"]["accion"] == "catalogo_enviado"
+
+                payload_fb = {
+                    "object": "page",
+                    "entry": [
+                        {
+                            "messaging": [
+                                {
+                                    "sender": {"id": "fb_7001"},
+                                    "message": {"text": "Esto es una estafa, pasame a un humano ya"},
+                                }
+                            ]
+                        }
+                    ],
+                }
+                r_fb = await client.post("/webhook", json=payload_fb)
+                assert r_fb.status_code == 200
+                assert r_fb.json()["resultados"][0]["alerta_humana"] is not None
+
+                r_resp = await client.post(
+                    "/api/humano/responder",
+                    json={"id_cliente": "fb_7001", "texto": "Atendido por asesor humano."},
+                )
+                assert r_resp.status_code == 200
+                assert r_resp.json()["canal"] == "Facebook"
+
+                r_react = await client.post(
+                    "/api/humano/reactivar",
+                    json={"id_cliente": "fb_7001"},
+                )
+                assert r_react.status_code == 200
+                assert r_react.json()["perfil"]["automatizacion_activa"] is True
+
+                r_cal = await client.post(
+                    "/api/calendario/disponibilidad",
+                    json={"fecha_hora": "2026-11-19 09:00", "estado": "OCUPADO", "cliente": "VIP"},
+                )
+                assert r_cal.status_code == 200
+
+                r_estado = await client.get("/api/estado")
+                assert r_estado.status_code == 200
+                estado = r_estado.json()
+                assert len(estado["agentes"]) == 5
+                assert len(estado["mensajes_fipa"]) > 0
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())

@@ -1,9 +1,9 @@
 """
-Implementación del AgentePromociones (<<play>> rol AnalistaPromociones).
-Arquitectura: Con aprendizaje (KNeighborsRegressor - Regresión KNN de scikit-learn)
+Implementacion del AgentePromociones (<<play>> rol AnalistaPromociones).
+Arquitectura: Con aprendizaje (KNeighborsRegressor - Regresion KNN de scikit-learn)
 y basado en utilidad.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -116,10 +116,13 @@ class AgentePromociones(AgenteBaseMASML):
         nivel_indecision: float,
         complejidad: int = 3,
         fidelidad_cliente: int = 1,
+        descuento_solicitado: float = 0.0,
     ) -> Dict[str, Any]:
         """
-        Predice el porcentaje de descuento óptimo usando KNeighborsRegressor (KNN)
-        de scikit-learn sobre el histórico de ofertas.
+        Predice el porcentaje de descuento optimo usando KNeighborsRegressor (KNN)
+        de scikit-learn sobre el historico de ofertas. Si el cliente exige un
+        porcentaje especifico elevado, evalua la propuesta resultante frente a
+        los limites de rentabilidad.
         """
         pred = self.modelo_knn.predecir_descuento_optimo(
             monto_cotizado=cotizacion_actual,
@@ -127,7 +130,12 @@ class AgentePromociones(AgenteBaseMASML):
             complejidad=complejidad,
             fidelidad_cliente=fidelidad_cliente,
         )
-        descuento_pct = float(pred["descuento_porciento"])
+        descuento_knn = float(pred["descuento_porciento"])
+        descuento_pct = (
+            max(descuento_knn, descuento_solicitado)
+            if descuento_solicitado > 0.0
+            else descuento_knn
+        )
         margen_base = self.entorno.tarifasYMargenes.margen_base_estimado
         factor = max(0.05, 1.0 - descuento_pct / 100.0)
         margen_proyectado = round((factor - (1.0 - margen_base)) / factor, 4)
@@ -138,6 +146,7 @@ class AgentePromociones(AgenteBaseMASML):
         )
         return {
             **pred,
+            "descuento_porciento": descuento_pct,
             "margen_proyectado": margen_proyectado,
             "cotizacion_actual": cotizacion_actual,
         }
@@ -190,6 +199,7 @@ class AgentePromociones(AgenteBaseMASML):
             nivel_indecision = float(payload.get("nivel_indecision", 0.72))
             complejidad = int(payload.get("complejidad", 3))
             fidelidad = int(payload.get("fidelidad_cliente", 1))
+            descuento_solicitado = float(payload.get("descuento_solicitado_cliente", 0.0))
 
             self.creencias["solicitudCoordinador"] = payload
             self.creencias["nivelIndecision"] = nivel_indecision
@@ -201,6 +211,7 @@ class AgentePromociones(AgenteBaseMASML):
                 nivel_indecision=nivel_indecision,
                 complejidad=complejidad,
                 fidelidad_cliente=fidelidad,
+                descuento_solicitado=descuento_solicitado,
             )
             await self.emitirPropuestaACoordinador(
                 comportamiento=comportamiento,
@@ -233,3 +244,4 @@ class AgentePromociones(AgenteBaseMASML):
                 "Coordinador rechazó propuesta por margen mínimo",
             )
             self._propuestas_pendientes.pop(conv_id, None)
+

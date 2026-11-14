@@ -1,1 +1,2 @@
 """Paquete raíz de SistemaMultiagenteComercial."""
+

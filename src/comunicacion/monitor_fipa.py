@@ -1,9 +1,9 @@
 """
 Logger / Monitor FIPA-ACL en tiempo real con Rich.
-Imprime cada mensaje entre agentes tanto con la etiqueta de 3 líneas (+ estereotipo)
+Imprime cada mensaje entre agentes tanto con la etiqueta de 3 lineas (+ estereotipo)
 como en estructura FIPA-ACL (JSON con :sender, :receiver, :content, :ontology, :protocol).
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class MonitorFIPAACL:
         self.historial_acciones: List[Dict[str, Any]] = []
 
     def limpiar(self) -> None:
-        """Reinicia las trazas acumuladas antes de ejecutar un nuevo escenario."""
+        """Reinicia las trazas acumuladas."""
         self.historial_mensajes.clear()
         self.historial_eventos_entorno.clear()
         self.historial_acciones.clear()
@@ -75,7 +75,7 @@ class MonitorFIPAACL:
             estilo = _COLORES_PERFORMATIVA.get(perf, "bold white")
             cuerpo = Text()
             cuerpo.append(etiqueta_slide + "\n", style=estilo)
-            cuerpo.append("─" * 58 + "\n", style="dim")
+            cuerpo.append("-" * 58 + "\n", style="dim")
             cuerpo.append(
                 json.dumps(estructura_fipa, ensure_ascii=False, indent=2),
                 style="white",
@@ -83,7 +83,7 @@ class MonitorFIPAACL:
             self.consola.print(
                 Panel(
                     cuerpo,
-                    title=f"[bold]FIPA-ACL Monitor · {estructura_fipa[':protocol']}[/bold]",
+                    title=f"[bold]FIPA-ACL Monitor | {estructura_fipa[':protocol']}[/bold]",
                     border_style=estilo.replace("bold ", ""),
                     expand=False,
                 )
@@ -99,10 +99,10 @@ class MonitorFIPAACL:
         }
         self.historial_eventos_entorno.append(registro)
         if not self.silencioso:
-            self.consola.print(f"[bold yellow]🌐 ENTORNO[/bold yellow] [{origen}]: {detalle}")
+            self.consola.print(f"[bold yellow][ENTORNO][/bold yellow] [{origen}]: {detalle}")
 
     def registrar_accion_agente(self, agente: str, accion: str, detalle: str = "") -> None:
-        """Registra una acción interna ejecutada por un agente MAS-ML."""
+        """Registra una accion interna ejecutada por un agente MAS-ML."""
         registro = {
             "timestamp": datetime.now().isoformat(timespec="milliseconds"),
             "agente": agente,
@@ -112,4 +112,4 @@ class MonitorFIPAACL:
         self.historial_acciones.append(registro)
         if not self.silencioso:
             info = f" ({detalle})" if detalle else ""
-            self.consola.print(f"[bold green]⚙️  ACCIÓN[/bold green] [{agente}]: {accion}{info}")
+            self.consola.print(f"[bold green][ACCION][/bold green] [{agente}]: {accion}{info}")

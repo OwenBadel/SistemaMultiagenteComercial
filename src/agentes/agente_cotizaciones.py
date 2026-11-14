@@ -1,9 +1,9 @@
 """
-Implementación del AgenteCotizaciones (<<play>> rol LiquidadorCotizaciones).
+Implementacion del AgenteCotizaciones (<<play>> rol LiquidadorCotizaciones).
 Arquitectura: Con aprendizaje (RandomForestRegressor de scikit-learn entrenado
-con el histórico de tarifas del entorno) y basado en metas.
+con el historico de tarifas del entorno) y basado en metas.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -145,8 +145,13 @@ class AgenteCotizaciones(AgenteBaseMASML):
             f"total=${cotizacion['valor_total']:,.0f} COP",
         )
         id_cliente = str(payload_contexto.get("id_cliente", "cliente_001"))
+        parametros = dict(payload_contexto.get("parametros_servicio", {}))
         self.entorno.perfilesClientes.actualizar_perfil(
-            id_cliente, ultima_cotizacion=cotizacion["valor_total"]
+            id_cliente,
+            ultima_cotizacion=cotizacion["valor_total"],
+            ultima_complejidad=int(parametros.get("complejidad", 3)),
+            parametros_parciales={},
+            esperando_parametros_cotizacion=False,
         )
         await self.enviar_fipa(
             comportamiento,
@@ -191,6 +196,12 @@ class AgenteCotizaciones(AgenteBaseMASML):
 
         validacion = self.extraerRequerimientos(parametros)
         if not validacion["valido"]:
+            id_cliente = str(payload.get("id_cliente", "cliente_001"))
+            self.entorno.perfilesClientes.actualizar_perfil(
+                id_cliente,
+                parametros_parciales=parametros,
+                esperando_parametros_cotizacion=True,
+            )
             # Rama else [Faltan parametros obligatorios] -> FAILURE
             await self.enviar_fipa(
                 comportamiento,
@@ -200,7 +211,7 @@ class AgenteCotizaciones(AgenteBaseMASML):
                 protocolo="FIPA-Request",
                 conversation_id=conv_id,
                 payload_extra={
-                    "id_cliente": payload.get("id_cliente", "cliente_001"),
+                    "id_cliente": id_cliente,
                     "canal": payload.get("canal", "WhatsApp"),
                     "faltantes": validacion["faltantes"],
                 },
@@ -215,3 +226,4 @@ class AgenteCotizaciones(AgenteBaseMASML):
             payload_contexto=payload,
             conversation_id=conv_id,
         )
+

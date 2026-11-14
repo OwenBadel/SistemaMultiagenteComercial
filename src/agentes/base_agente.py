@@ -1,9 +1,9 @@
 """
 Clase base para los 5 agentes MAS-ML construidos sobre `spade.agent.Agent`.
-Provee gestión de creencias, planes conceptuales, validación de roles y
-emisión de mensajes FIPA-ACL monitoreados en tiempo real.
+Provee gestion de creencias, planes conceptuales, validacion de roles y
+emision de mensajes FIPA-ACL monitoreados en tiempo real.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -112,3 +112,4 @@ class AgenteBaseMASML(Agent):
         self.monitor.registrar_mensaje_fipa(msg)
         await comportamiento.send(msg)
         return msg
+

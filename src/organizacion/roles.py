@@ -1,9 +1,9 @@
 """
-Definición formal de los 5 Roles MAS-ML (<<role>>) del SistemaMultiagenteComercial
-con sus Deberes, Derechos y Restricciones exactos según el Diagrama de Clases
+Definicion formal de los 5 Roles MAS-ML (<<role>>) del SistemaMultiagenteComercial
+con sus Deberes, Derechos y Restricciones exactos segun el Diagrama de Clases
 y las tablas conceptuales del proyecto.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -153,3 +153,4 @@ class GestorAgenda(RolMASML):
             "No puede modificar, consultar datos privados ni cancelar eventos preexistentes de otros clientes",
         ]
     )
+

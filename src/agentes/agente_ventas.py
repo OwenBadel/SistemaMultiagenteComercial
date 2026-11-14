@@ -1,9 +1,9 @@
 """
-Implementación del AgenteVentas (<<play>> rol EjecutivoVentas).
-Arquitectura: Con aprendizaje (NLP para intención y sentimiento/tono del cliente:
+Implementacion del AgenteVentas (<<play>> rol EjecutivoVentas).
+Arquitectura: Con aprendizaje (NLP para intencion y sentimiento/tono del cliente:
 interesado, indeciso u hostil) y basado en utilidad.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -227,14 +227,28 @@ class AgenteVentas(AgenteBaseMASML):
         texto = str(payload_evt.get("texto", ""))
         canal = str(payload_evt.get("canal", "WhatsApp"))
         id_cliente = str(payload_evt.get("id_cliente", "cliente_001"))
-        self._automatizacion_activa = True
 
+        perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(
+            id_cliente, canal=canal
+        )
+        # Si el caso fue escalado al profesional humano (Human-in-the-Loop), el bot permanece pausado
+        if not perfil.get("automatizacion_activa", True):
+            self.registrar_accion(
+                "atencionPausadaHumanInTheLoop()",
+                f"cliente={id_cliente} | canal={canal}",
+            )
+            self.marcar_ciclo_completado(
+                {"resultado": "en_atencion_humana", "id_cliente": id_cliente, "canal": canal}
+            )
+            return
+
+        self._automatizacion_activa = True
         analisis = self.interpretarLenguajeNatural(texto=texto, tipo_evento=tipo_evento)
         self.entorno.perfilesClientes.actualizar_perfil(
             id_cliente, tono_actual=analisis["tono_cliente"]
         )
 
-        # Caso 4: Tono hostil o reclamo crítico -> alerta_caso_critico
+        # Caso 4: Tono hostil o reclamo critico -> alerta_caso_critico
         if analisis["tono_cliente"] == "hostil" or analisis["intencion"] == "reclamo_critico":
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
@@ -251,16 +265,24 @@ class AgenteVentas(AgenteBaseMASML):
             )
             return
 
-        # Caso 1 Paso 1: Consulta inicial de servicio -> envía catálogo visual
-        if tipo_evento == "consulta_servicio" or analisis["intencion"] == "consulta_servicio":
-            res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
-            self.marcar_ciclo_completado({"accion": "catalogo_enviado", "respuesta": res})
-            return
+        # Si el cliente venia de parametros incompletos y responde con datos faltantes
+        parametros_extraidos = dict(analisis.get("parametros_extraidos", {}))
+        esperando_params = bool(perfil.get("esperando_parametros_cotizacion", False))
+        tiene_nuevos_params = any(
+            k in parametros_extraidos
+            for k in ("tipo_servicio", "horas_estimadas", "complejidad", "urgencia_dias")
+        )
 
-        # Caso 1 Paso 2: Solicitud de cotización con parámetros -> escala a Coordinador
-        if tipo_evento == "parametros_servicio" or analisis["intencion"] == "solicitud_cotizacion":
+        # Paso 2 (Cotizacion): Solicitud de cotizacion o respuesta aclaratoria con parametros
+        if (
+            tipo_evento == "parametros_servicio"
+            or analisis["intencion"] == "solicitud_cotizacion"
+            or (esperando_params and tiene_nuevos_params)
+        ):
+            params_previos = dict(perfil.get("parametros_parciales", {}))
             params = {
-                **analisis.get("parametros_extraidos", {}),
+                **params_previos,
+                **parametros_extraidos,
                 **dict(payload_evt.get("parametros_servicio", {})),
             }
             await self.escalarCasoACoordinador(
@@ -277,11 +299,40 @@ class AgenteVentas(AgenteBaseMASML):
             )
             return
 
-        # Caso 2: Objeción de precio / cliente indeciso -> solicita evaluar incentivo
+        # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual a Meta
+        if tipo_evento == "consulta_servicio" or analisis["intencion"] == "consulta_servicio":
+            res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
+            envio_meta = await self.entorno.despachar_salida_meta(
+                canal=canal, id_cliente=id_cliente, texto=str(res["contenido"])
+            )
+            self.marcar_ciclo_completado(
+                {"accion": "catalogo_enviado", "respuesta": res, "meta": envio_meta}
+            )
+            return
+
+        # Caso 2: Objecion de precio / cliente indeciso -> solicita evaluar incentivo
         if tipo_evento == "objecion_precio" or analisis["intencion"] == "objecion_precio":
             nivel_indecision = float(
                 payload_evt.get("nivel_indecision", analisis["nivel_indecision"])
             )
+            cotizacion_actual = float(
+                payload_evt.get("cotizacion_actual")
+                or perfil.get("ultima_cotizacion")
+                or 4_500_000.0
+            )
+            complejidad = int(
+                payload_evt.get("complejidad")
+                or perfil.get("ultima_complejidad")
+                or 3
+            )
+            desc_solicitado = float(
+                parametros_extraidos.get("descuento_solicitado_cliente", 0.0)
+            )
+            fidelidad = int(payload_evt.get("fidelidad", perfil.get("fidelidad", 1)))
+            if desc_solicitado >= 18.0:
+                nivel_indecision = max(nivel_indecision, 0.96)
+                fidelidad = 3
+
             pred = (
                 "(evaluar_incentivo nivel_indecision_alto)"
                 if nivel_indecision >= 0.65
@@ -297,18 +348,22 @@ class AgenteVentas(AgenteBaseMASML):
                     "id_cliente": id_cliente,
                     "canal": canal,
                     "nivel_indecision": nivel_indecision,
-                    "cotizacion_actual": payload_evt.get("cotizacion_actual", 4_500_000.0),
-                    "fidelidad_cliente": payload_evt.get("fidelidad", 1),
-                    "complejidad": payload_evt.get("complejidad", 3),
+                    "cotizacion_actual": cotizacion_actual,
+                    "fidelidad_cliente": fidelidad,
+                    "complejidad": complejidad,
+                    "descuento_solicitado_cliente": desc_solicitado,
                 },
             )
             return
 
-        # Caso 3: Aceptación y solicitud de agendamiento
+        # Caso 3: Aceptacion y solicitud de agendamiento
         if tipo_evento == "aceptar_cotizacion" or analisis["intencion"] == "solicitud_agendamiento":
             fecha_hora = str(
                 payload_evt.get("fecha_hora")
-                or analisis["parametros_extraidos"].get("fecha_hora", "2026-11-18 10:00")
+                or parametros_extraidos.get("fecha_hora", "2026-11-18 10:00")
+            )
+            cotizacion_aprobada = bool(
+                payload_evt.get("cotizacion_aprobada", perfil.get("ultima_cotizacion") is not None or True)
             )
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
@@ -318,12 +373,22 @@ class AgenteVentas(AgenteBaseMASML):
                 conversation_id=conversation_id,
                 payload_extra={
                     "id_cliente": id_cliente,
-                    "nombre_cliente": payload_evt.get("nombre", "Cliente Empresarial"),
+                    "nombre_cliente": payload_evt.get("nombre", perfil.get("nombre", "Cliente Empresarial")),
                     "canal": canal,
                     "fecha_hora": fecha_hora,
-                    "cotizacion_aprobada": bool(payload_evt.get("cotizacion_aprobada", True)),
+                    "cotizacion_aprobada": cotizacion_aprobada,
                 },
             )
+            return
+
+        # Fallback cordial si la intencion no encaja en categorias previas
+        res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
+        envio_meta = await self.entorno.despachar_salida_meta(
+            canal=canal, id_cliente=id_cliente, texto=str(res["contenido"])
+        )
+        self.marcar_ciclo_completado(
+            {"accion": "catalogo_enviado", "respuesta": res, "meta": envio_meta}
+        )
 
     async def procesar_respuesta_coordinador(
         self, comportamiento: CyclicBehaviour, msg: Message
@@ -348,8 +413,9 @@ class AgenteVentas(AgenteBaseMASML):
                 f"Complejidad/Urgencia: ${desglose.get('ajuste_complejidad_urgencia_cop', 0):,.0f} COP)."
             )
             res = self.responderLenguajeNatural("cotizacion_formal", canal, id_cliente, texto_cot)
+            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_cot)
             self.marcar_ciclo_completado(
-                {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res}
+                {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res, "meta": envio_meta}
             )
 
         elif perf == "REQUEST" and "solicitar_parametros_faltantes" in contenido:
@@ -359,8 +425,9 @@ class AgenteVentas(AgenteBaseMASML):
                 f"parámetros obligatorios: {', '.join(faltantes)}."
             )
             res = self.responderLenguajeNatural("pregunta_aclaratoria", canal, id_cliente, texto_aclaracion)
+            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_aclaracion)
             self.marcar_ciclo_completado(
-                {"resultado": "parametros_incompletos", "faltantes": faltantes, "envio": res}
+                {"resultado": "parametros_incompletos", "faltantes": faltantes, "envio": res, "meta": envio_meta}
             )
 
         elif perf == "INFORM" and "transferir_promocion" in contenido:
@@ -372,8 +439,11 @@ class AgenteVentas(AgenteBaseMASML):
                 id_cliente=id_cliente,
                 valor_final=valor_final,
             )
+            envio_meta = await self.entorno.despachar_salida_meta(
+                canal, id_cliente, str(res["contenido"])
+            )
             self.marcar_ciclo_completado(
-                {"resultado": "promocion_presentada", "descuento_porciento": descuento, "valor_final": valor_final, "envio": res}
+                {"resultado": "promocion_presentada", "descuento_porciento": descuento, "valor_final": valor_final, "envio": res, "meta": envio_meta}
             )
 
         elif perf == "REFUSE" and "descuento_no_viable" in contenido:
@@ -382,16 +452,18 @@ class AgenteVentas(AgenteBaseMASML):
                 "calidad del servicio, por lo que mantenemos la tarifa base formal."
             )
             res = self.responderLenguajeNatural("mantener_tarifa_base", canal, id_cliente, texto_refuse)
+            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_refuse)
             self.marcar_ciclo_completado(
-                {"resultado": "descuento_rechazado", "envio": res}
+                {"resultado": "descuento_rechazado", "envio": res, "meta": envio_meta}
             )
 
         elif perf == "INFORM" and "reserva_confirmada" in contenido:
             fecha_hora = str(payload.get("fecha_hora", ""))
-            texto_cita = f"¡Cita confirmada exitosamente para el {fecha_hora}! Te hemos enviado el recordatorio."
+            texto_cita = f"Cita confirmada exitosamente para el {fecha_hora}. Te hemos enviado el recordatorio."
             res = self.responderLenguajeNatural("confirmacion_cita", canal, id_cliente, texto_cita)
+            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_cita)
             self.marcar_ciclo_completado(
-                {"resultado": "cita_confirmada", "fecha_hora": fecha_hora, "envio": res}
+                {"resultado": "cita_confirmada", "fecha_hora": fecha_hora, "envio": res, "meta": envio_meta}
             )
 
         elif perf == "INFORM" and "ofrecer_alternativas" in contenido:
@@ -401,8 +473,9 @@ class AgenteVentas(AgenteBaseMASML):
                 f"Te propongo estos bloques disponibles: {', '.join(alternativas)}."
             )
             res = self.responderLenguajeNatural("sugerir_horarios_alternativos", canal, id_cliente, texto_alt)
+            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_alt)
             self.marcar_ciclo_completado(
-                {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res}
+                {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res, "meta": envio_meta}
             )
 
         elif perf == "CANCEL" and "cancelar_accion" in contenido:
@@ -415,6 +488,7 @@ class AgenteVentas(AgenteBaseMASML):
                 "(automatizacion_pausada chat_cliente)",
                 protocolo="FIPA-Request",
                 conversation_id=conv_id,
-                payload_extra={"id_cliente": id_cliente},
+                payload_extra={"id_cliente": id_cliente, "canal": canal},
             )
             self.marcar_ciclo_completado({"resultado": "automatizacion_pausada", "id_cliente": id_cliente})
+

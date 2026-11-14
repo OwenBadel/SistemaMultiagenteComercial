@@ -1,10 +1,10 @@
 """
-Implementación de la organización <<organization>> SistemaMultiagenteComercial
-bajo el metamodelo MAS-ML: composición de 5 roles (<<owns>>), relación de hábitat
-(<<inhabit>>), control jerárquico (<<control>>), las 5 dependencias formales
+Implementacion de la organizacion <<organization>> SistemaMultiagenteComercial
+bajo el metamodelo MAS-ML: composicion de 5 roles (<<owns>>), relacion de habitat
+(<<inhabit>>), control jerarquico (<<control>>), las 5 dependencias formales
 (<<dependency>>) y reglas organizacionales de escalamiento y canal centralizado.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -156,3 +156,4 @@ class SistemaMultiagenteComercial:
         no se puede reservar cita sin cotización aprobada previa.
         """
         return bool(cotizacion_aprobada)
+

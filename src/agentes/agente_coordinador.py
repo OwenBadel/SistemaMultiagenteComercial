@@ -1,10 +1,10 @@
 """
-Implementación del AgenteCoordinador (<<play>> rol Coordinador).
+Implementacion del AgenteCoordinador (<<play>> rol Coordinador).
 Arquitectura: Basado en utilidad.
-Relación <<control>>: Supervisa y delega turnos a EjecutivoVentas,
+Relacion <<control>>: Supervisa y delega turnos a EjecutivoVentas,
 AnalistaPromociones, LiquidadorCotizaciones y GestorAgenda.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -302,7 +302,7 @@ class AgenteCoordinador(AgenteBaseMASML):
     def pausarYAlertarHumano(
         self, historial_charla: List[Dict[str, Any]], motivo_critico: str, id_cliente: str
     ) -> Dict[str, Any]:
-        """Pausa la automatización y escala el control al profesional humano en el entorno."""
+        """Pausa la automatizacion y escala el control al profesional humano en el entorno."""
         self.registrar_accion("pausarYAlertarHumano()", f"cliente={id_cliente}")
         resultado = self.entorno.notificarAlertaHumana(
             historial_charla=historial_charla,
@@ -310,7 +310,6 @@ class AgenteCoordinador(AgenteBaseMASML):
             id_cliente=id_cliente,
         )
         self.creencias["estadoAgentes"]["AgenteVentas"] = "pausado_por_escalamiento_humano"
-        self.marcar_ciclo_completado(resultado)
         return resultado
 
     # ------------------------------------------------------------------
@@ -350,12 +349,20 @@ class AgenteCoordinador(AgenteBaseMASML):
             elif perf == "CONFIRM" and "automatizacion_pausada" in contenido:
                 ctx = self._contexto_conversaciones.get(conv_id, {})
                 id_cliente = str(payload.get("id_cliente", ctx.get("id_cliente", "cliente_001")))
+                canal = str(payload.get("canal", ctx.get("canal", "WhatsApp")))
+                motivo_critico = str(ctx.get("motivo_critico", "reclamo_critico_cliente"))
                 perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
-                self.pausarYAlertarHumano(
+                resultado = self.pausarYAlertarHumano(
                     historial_charla=list(perfil.get("historial_interacciones", [])),
-                    motivo_critico=str(ctx.get("motivo_critico", "reclamo_critico_cliente")),
+                    motivo_critico=motivo_critico,
                     id_cliente=id_cliente,
                 )
+                await self.entorno.despachar_alerta_humana_meta(
+                    motivo_critico=motivo_critico,
+                    id_cliente=id_cliente,
+                    canal=canal,
+                )
+                self.marcar_ciclo_completado(resultado)
 
         elif emisor == "cotizaciones":
             if perf == "AGREE":

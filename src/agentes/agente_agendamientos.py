@@ -1,10 +1,10 @@
 """
-Implementación del AgenteAgendamientos (<<play>> rol GestorAgenda).
+Implementacion del AgenteAgendamientos (<<play>> rol GestorAgenda).
 Arquitectura: Basado en metas.
 Previene superposiciones horarias, consulta disponibilidad real en agendaVirtual,
-sugiere bloques alternativos y registra citas confirmadas vía QUERY-IF, AGREE y CONFIRM.
+sugiere bloques alternativos y registra citas confirmadas via QUERY-IF, AGREE y CONFIRM.
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -206,3 +206,4 @@ class AgenteAgendamientos(AgenteBaseMASML):
                     "estado": "OCUPADO",
                 },
             )
+

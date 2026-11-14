@@ -1,18 +1,22 @@
 """
-Implementación del entorno compartido <<environment>> EntornoVirtualAtencion
-según el Diagrama de Clases MAS-ML y la Tabla de Análisis del Entorno.
+Implementacion del entorno compartido <<environment>> EntornoVirtualAtencion
+segun el Diagrama de Clases MAS-ML y la Tabla de Analisis del Entorno,
+conectado con Meta Platforms (WhatsApp, Instagram, Messenger).
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
 from src.ml.datasets import CATALOGO_SERVICIOS
+
+if TYPE_CHECKING:
+    from src.integracion_meta.cliente_meta import ClienteMetaGraphAPI
 
 
 @dataclass
@@ -66,21 +70,32 @@ class Informacion:
     perfiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def obtener_o_crear_perfil(
-        self, id_cliente: str, nombre: str = "Cliente Potencial", canal: str = "WhatsApp"
+        self,
+        id_cliente: str,
+        nombre: str = "Cliente Potencial",
+        canal: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Obtiene el perfil del cliente o inicializa uno nuevo."""
+        """Obtiene el perfil del cliente o inicializa uno nuevo sin sobreescribir el canal."""
         if id_cliente not in self.perfiles:
             self.perfiles[id_cliente] = {
                 "id_cliente": id_cliente,
                 "nombre": nombre,
-                "canal": canal,
+                "canal": canal or "WhatsApp",
                 "historial_interacciones": [],
                 "tono_actual": "neutral",
                 "fidelidad": 1,
                 "ultima_cotizacion": None,
+                "ultima_complejidad": 3,
+                "parametros_parciales": {},
+                "esperando_parametros_cotizacion": False,
                 "promocion_aplicada": None,
                 "automatizacion_activa": True,
             }
+        else:
+            if nombre and nombre != "Cliente Potencial":
+                self.perfiles[id_cliente]["nombre"] = nombre
+            if canal is not None:
+                self.perfiles[id_cliente]["canal"] = canal
         return self.perfiles[id_cliente]
 
     def actualizar_perfil(self, id_cliente: str, **campos: Any) -> Dict[str, Any]:
@@ -181,6 +196,7 @@ class EntornoVirtualAtencion:
         tarifas_historicas: pd.DataFrame,
         historico_ofertas: pd.DataFrame,
         logger_evento: Optional[Callable[[str, str], None]] = None,
+        cliente_meta: Optional["ClienteMetaGraphAPI"] = None,
     ) -> None:
         self.plataformas: RedesSociales = RedesSociales()
         self.perfilesClientes: Informacion = Informacion()
@@ -194,6 +210,11 @@ class EntornoVirtualAtencion:
         self.alertas_humanas: List[Dict[str, Any]] = []
         self.eventos_disparados: List[Dict[str, Any]] = []
         self._logger_evento = logger_evento
+        self.cliente_meta: Optional["ClienteMetaGraphAPI"] = cliente_meta
+
+    def configurar_cliente_meta(self, cliente_meta: "ClienteMetaGraphAPI") -> None:
+        """Conecta el cliente real de Meta Graph API al entorno."""
+        self.cliente_meta = cliente_meta
 
     def configurar_logger_evento(self, callback: Callable[[str, str], None]) -> None:
         """Conecta el monitor en tiempo real para trazar eventos del entorno."""
@@ -363,14 +384,19 @@ class EntornoVirtualAtencion:
         motivo_critico: str,
         id_cliente: str = "cliente_001",
     ) -> Dict[str, Any]:
-        """Pausa la automatización del cliente y alerta al profesional humano."""
-        self.perfilesClientes.actualizar_perfil(id_cliente, automatizacion_activa=False)
+        """Pausa la automatizacion del cliente y alerta al profesional humano."""
+        perfil = self.perfilesClientes.actualizar_perfil(
+            id_cliente, automatizacion_activa=False
+        )
         alerta = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "id_cliente": id_cliente,
+            "nombre": perfil.get("nombre", "Cliente"),
+            "canal": perfil.get("canal", "WhatsApp"),
             "motivo_critico": motivo_critico,
             "historial_charla": historial_charla,
             "estado": "alerta_recibida_por_profesional",
+            "resuelta": False,
         }
         self.alertas_humanas.append(alerta)
         self._emitir_traza(
@@ -378,3 +404,34 @@ class EntornoVirtualAtencion:
             f"pausarYAlertarHumano(motivo='{motivo_critico}') -> ok(alerta_recibida_por_profesional)",
         )
         return alerta
+
+    async def despachar_salida_meta(
+        self, canal: str, id_cliente: str, texto: str
+    ) -> Dict[str, Any]:
+        """Envia realmente el mensaje de salida via Meta Graph API si esta configurada."""
+        if self.cliente_meta is None:
+            return {"enviado": False, "estado": "sin_cliente_meta"}
+        resultado = await self.cliente_meta.enviar_mensaje_canal(
+            canal=canal, id_cliente=id_cliente, texto=texto
+        )
+        self._emitir_traza(
+            f"EntornoVirtualAtencion -> Meta[{canal}]",
+            f"destino={id_cliente} | estado={resultado.get('estado')}",
+        )
+        return resultado
+
+    async def despachar_alerta_humana_meta(
+        self, motivo_critico: str, id_cliente: str, canal: str
+    ) -> Dict[str, Any]:
+        """Envia alerta real al WhatsApp del administrador humano si esta configurado."""
+        if self.cliente_meta is None:
+            return {"enviado": False, "estado": "sin_cliente_meta"}
+        resultado = await self.cliente_meta.notificar_humano_whatsapp(
+            motivo=motivo_critico, id_cliente=id_cliente, canal=canal
+        )
+        self._emitir_traza(
+            "EntornoVirtualAtencion -> AdminHumano[WhatsApp]",
+            f"alerta_cliente={id_cliente} | estado={resultado.get('estado')}",
+        )
+        return resultado
+

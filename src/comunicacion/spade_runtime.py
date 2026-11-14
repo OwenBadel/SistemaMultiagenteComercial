@@ -1,10 +1,9 @@
 """
 Runtime SPADE autocontenido compatible con:
 1. Servidor XMPP embebido oficial de SPADE (`spade.run(..., embedded_xmpp_server=True)`).
-2. Modo Contenedor Local SPADE en memoria (para pruebas rápidas con pytest o
-   cuando se requiere reiniciar múltiples bucles asyncio en una misma sesión).
+2. Modo Contenedor Local SPADE en memoria (para pruebas rapidas con pytest).
 
-Autoría: Owen Badel Hooker
+Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -70,3 +69,4 @@ async def detener_agentes_spade(
     if not usar_xmpp_embebido:
         # Cede un tick para que las tareas canceladas terminen limpiamente
         await asyncio.sleep(0.02)
+
