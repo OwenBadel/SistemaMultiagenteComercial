@@ -1,0 +1,420 @@
+"""
+Implementación del AgenteVentas (<<play>> rol EjecutivoVentas).
+Arquitectura: Con aprendizaje (NLP para intención y sentimiento/tono del cliente:
+interesado, indeciso u hostil) y basado en utilidad.
+
+Autoría: Owen Badel Hooker
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+
+from spade.behaviour import CyclicBehaviour, OneShotBehaviour
+from spade.message import Message
+
+from src.agentes.base_agente import JID_COORDINADOR, AgenteBaseMASML
+from src.comunicacion.fipa_acl import extraer_payload_fipa
+from src.comunicacion.monitor_fipa import MonitorFIPAACL
+from src.entorno.entorno_virtual import EntornoVirtualAtencion
+from src.ml.modelos_ml import ModeloNLPVentas
+from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+
+
+@dataclass
+class PlanAtencionInicial:
+    """Plan MAS-ML para atención empática, envío de catálogo y perfilamiento."""
+
+    nombre: str = "PlanAtencionInicial"
+    objetivo: str = "Atender inicialmente en el chat y escalar casos fuera de dominio"
+
+
+@dataclass
+class PlanCierreConPromo:
+    """Plan MAS-ML para presentar promociones autorizadas y guiar hacia la compra."""
+
+    nombre: str = "PlanCierreConPromo"
+    objetivo: str = "Comunicar persuasivamente incentivos aprobados por el Coordinador"
+
+
+class AgenteVentas(AgenteBaseMASML):
+    """
+    <<agent>> AgenteVentas:
+    Puerta única de entrada al cliente. Integra NLP con Scikit-Learn y coordina
+    el escalamiento al AgenteCoordinador.
+    """
+
+    def __init__(
+        self,
+        entorno: EntornoVirtualAtencion,
+        organizacion: SistemaMultiagenteComercial,
+        monitor: MonitorFIPAACL,
+        modelo_nlp: ModeloNLPVentas,
+        jid: str = "ventas@localhost",
+        password: str = "sma_2026",
+    ) -> None:
+        super().__init__(
+            jid=jid,
+            password=password,
+            nombre_agente="AgenteVentas",
+            nombre_rol="EjecutivoVentas",
+            arquitectura_tipo="Con aprendizaje (NLP) y basado en utilidad",
+            entorno=entorno,
+            organizacion=organizacion,
+            monitor=monitor,
+        )
+        self.modelo_nlp = modelo_nlp
+        self.creencias: Dict[str, Any] = {
+            "mensajesEntrantes": [],
+            "historialCharla": [],
+            "tonoCliente": "neutral",
+            "promocionAprobada": None,
+        }
+        self.objetivos = [
+            "Maximizar interes, satisfaccion y conversion",
+        ]
+        self.planes = {
+            "PlanAtencionInicial": PlanAtencionInicial(),
+            "PlanCierreConPromo": PlanCierreConPromo(),
+        }
+        self._automatizacion_activa: bool = True
+
+    class ComportamientoEscuchaFIPA(CyclicBehaviour):
+        """Recibe respuestas del AgenteCoordinador mediante mensajes FIPA-ACL."""
+
+        async def run(self) -> None:
+            msg: Message | None = await self.receive(timeout=0.2)
+            if msg is None:
+                return
+            await self.agent.procesar_respuesta_coordinador(self, msg)
+
+    class ComportamientoEntradaEntorno(OneShotBehaviour):
+        """Procesa un evento entrante disparado desde EntornoVirtualAtencion."""
+
+        def __init__(self, evento: Dict[str, Any], conversation_id: str) -> None:
+            super().__init__()
+            self.evento = evento
+            self.conversation_id = conversation_id
+
+        async def run(self) -> None:
+            await self.agent.atender_evento_entorno(
+                comportamiento=self,
+                evento=self.evento,
+                conversation_id=self.conversation_id,
+            )
+
+    async def setup(self) -> None:
+        self.add_behaviour(
+            self.ComportamientoEscuchaFIPA(), self.crear_plantilla_comercial()
+        )
+
+    def procesar_evento_desde_entorno(
+        self, evento: Dict[str, Any], conversation_id: str
+    ) -> None:
+        """Lanza un OneShotBehaviour en SPADE para atender un eventoLlegadaMensaje."""
+        self.reiniciar_evento_ciclo()
+        comportamiento = self.ComportamientoEntradaEntorno(
+            evento=evento, conversation_id=conversation_id
+        )
+        self.add_behaviour(comportamiento)
+
+    # ------------------------------------------------------------------
+    # ACCIONES DEL DIAGRAMA DE CLASES MAS-ML
+    # ------------------------------------------------------------------
+    def interpretarLenguajeNatural(
+        self, texto: str, tipo_evento: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Clasifica intención y detecta tonoCliente usando ModeloNLPVentas."""
+        analisis = self.modelo_nlp.analizar_mensaje(texto=texto, contexto_tipo=tipo_evento)
+        self.creencias["mensajesEntrantes"].append(texto)
+        self.creencias["historialCharla"].append({"rol": "cliente", "texto": texto})
+        self.creencias["tonoCliente"] = analisis["tono_cliente"]
+        self.registrar_accion(
+            "interpretarLenguajeNatural()",
+            f"intencion={analisis['intencion']} | tonoCliente={analisis['tono_cliente']}",
+        )
+        return analisis
+
+    def enviarCatalogoVisual(self, canal: str, id_cliente: str) -> Dict[str, Any]:
+        """Envía el portafolio visual de servicios al cliente a través del entorno."""
+        portafolio = list(self.entorno.plataformas.portafolio_servicios.keys())
+        texto_catalogo = (
+            "¡Hola! Con gusto te comparto nuestro portafolio de servicios: "
+            + ", ".join(portafolio)
+            + ". Indícame qué servicio necesitas, horas estimadas, complejidad (1-5) y urgencia."
+        )
+        self.creencias["historialCharla"].append(
+            {"rol": "agente_ventas", "texto": texto_catalogo}
+        )
+        self.registrar_accion("enviarCatalogoVisual(portafolio_servicios)", f"canal={canal}")
+        res = self.entorno.registrarRespuestaEntorno(
+            accion="enviarCatalogoVisual(portafolio_servicios)",
+            canal=canal,
+            id_cliente=id_cliente,
+            contenido=texto_catalogo,
+        )
+        return res
+
+    def responderLenguajeNatural(
+        self, tipo_respuesta: str, canal: str, id_cliente: str, mensaje: str
+    ) -> Dict[str, Any]:
+        """Envía respuesta natural al cliente mediante EntornoVirtualAtencion."""
+        self.creencias["historialCharla"].append(
+            {"rol": "agente_ventas", "texto": mensaje}
+        )
+        self.registrar_accion(f"responderLenguajeNatural({tipo_respuesta})", f"canal={canal}")
+        res = self.entorno.registrarRespuestaEntorno(
+            accion=f"responderLenguajeNatural({tipo_respuesta})",
+            canal=canal,
+            id_cliente=id_cliente,
+            contenido=mensaje,
+        )
+        return res
+
+    def presentarPromocionAlCliente(
+        self, descuento_porciento: float, canal: str, id_cliente: str, valor_final: float
+    ) -> Dict[str, Any]:
+        """Comunica al cliente la promoción previamente autorizada por el Coordinador."""
+        self.creencias["promocionAprobada"] = descuento_porciento
+        mensaje = (
+            f"Tenemos una oferta especial autorizada para ti: {descuento_porciento:.0f}% de descuento, "
+            f"quedando la inversión en ${valor_final:,.0f} COP. ¿Agendamos tu cita de inicio?"
+        )
+        self.creencias["historialCharla"].append(
+            {"rol": "agente_ventas", "texto": mensaje}
+        )
+        pct_tag = f"descuento_{int(round(descuento_porciento))}_porciento"
+        self.registrar_accion(f"presentarPromocionAlCliente({pct_tag})", f"canal={canal}")
+        return self.entorno.registrarRespuestaEntorno(
+            accion=f"presentarPromocionAlCliente({pct_tag})",
+            canal=canal,
+            id_cliente=id_cliente,
+            contenido=mensaje,
+        )
+
+    async def escalarCasoACoordinador(
+        self,
+        comportamiento: OneShotBehaviour,
+        performativa: str,
+        predicado: str,
+        protocolo: str,
+        conversation_id: str,
+        payload_extra: Dict[str, Any],
+    ) -> None:
+        """Escala formalmente el caso hacia el AgenteCoordinador vía FIPA-ACL."""
+        self.registrar_accion("escalarCasoACoordinador()", predicado)
+        await self.enviar_fipa(
+            comportamiento,
+            JID_COORDINADOR,
+            performativa,
+            predicado,
+            protocolo=protocolo,
+            conversation_id=conversation_id,
+            payload_extra=payload_extra,
+        )
+
+    # ------------------------------------------------------------------
+    # LÓGICA DE ATENCIÓN AL ENTORNO Y RESPUESTAS FIPA DEL COORDINADOR
+    # ------------------------------------------------------------------
+    async def atender_evento_entorno(
+        self,
+        comportamiento: OneShotBehaviour,
+        evento: Dict[str, Any],
+        conversation_id: str,
+    ) -> None:
+        payload_evt = dict(evento.get("payload", {}))
+        tipo_evento = str(evento.get("tipo_evento", ""))
+        texto = str(payload_evt.get("texto", ""))
+        canal = str(payload_evt.get("canal", "WhatsApp"))
+        id_cliente = str(payload_evt.get("id_cliente", "cliente_001"))
+        self._automatizacion_activa = True
+
+        analisis = self.interpretarLenguajeNatural(texto=texto, tipo_evento=tipo_evento)
+        self.entorno.perfilesClientes.actualizar_perfil(
+            id_cliente, tono_actual=analisis["tono_cliente"]
+        )
+
+        # Caso 4: Tono hostil o reclamo crítico -> alerta_caso_critico
+        if analisis["tono_cliente"] == "hostil" or analisis["intencion"] == "reclamo_critico":
+            await self.escalarCasoACoordinador(
+                comportamiento=comportamiento,
+                performativa="INFORM",
+                predicado="(alerta_caso_critico tono_hostil)",
+                protocolo="FIPA-Request",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "canal": canal,
+                    "motivo_critico": texto,
+                    "tono_cliente": "hostil",
+                },
+            )
+            return
+
+        # Caso 1 Paso 1: Consulta inicial de servicio -> envía catálogo visual
+        if tipo_evento == "consulta_servicio" or analisis["intencion"] == "consulta_servicio":
+            res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
+            self.marcar_ciclo_completado({"accion": "catalogo_enviado", "respuesta": res})
+            return
+
+        # Caso 1 Paso 2: Solicitud de cotización con parámetros -> escala a Coordinador
+        if tipo_evento == "parametros_servicio" or analisis["intencion"] == "solicitud_cotizacion":
+            params = {
+                **analisis.get("parametros_extraidos", {}),
+                **dict(payload_evt.get("parametros_servicio", {})),
+            }
+            await self.escalarCasoACoordinador(
+                comportamiento=comportamiento,
+                performativa="REQUEST",
+                predicado="(escalar_caso cotizacion parametros_servicio)",
+                protocolo="FIPA-Request",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "canal": canal,
+                    "parametros_servicio": params,
+                },
+            )
+            return
+
+        # Caso 2: Objeción de precio / cliente indeciso -> solicita evaluar incentivo
+        if tipo_evento == "objecion_precio" or analisis["intencion"] == "objecion_precio":
+            nivel_indecision = float(
+                payload_evt.get("nivel_indecision", analisis["nivel_indecision"])
+            )
+            pred = (
+                "(evaluar_incentivo nivel_indecision_alto)"
+                if nivel_indecision >= 0.65
+                else "(evaluar_incentivo nivel_indecision_medio)"
+            )
+            await self.escalarCasoACoordinador(
+                comportamiento=comportamiento,
+                performativa="REQUEST",
+                predicado=pred,
+                protocolo="FIPA-Propose",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "canal": canal,
+                    "nivel_indecision": nivel_indecision,
+                    "cotizacion_actual": payload_evt.get("cotizacion_actual", 4_500_000.0),
+                    "fidelidad_cliente": payload_evt.get("fidelidad", 1),
+                    "complejidad": payload_evt.get("complejidad", 3),
+                },
+            )
+            return
+
+        # Caso 3: Aceptación y solicitud de agendamiento
+        if tipo_evento == "aceptar_cotizacion" or analisis["intencion"] == "solicitud_agendamiento":
+            fecha_hora = str(
+                payload_evt.get("fecha_hora")
+                or analisis["parametros_extraidos"].get("fecha_hora", "2026-11-18 10:00")
+            )
+            await self.escalarCasoACoordinador(
+                comportamiento=comportamiento,
+                performativa="REQUEST",
+                predicado="(escalar_caso agendamiento fecha_hora)",
+                protocolo="FIPA-Query",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "nombre_cliente": payload_evt.get("nombre", "Cliente Empresarial"),
+                    "canal": canal,
+                    "fecha_hora": fecha_hora,
+                    "cotizacion_aprobada": bool(payload_evt.get("cotizacion_aprobada", True)),
+                },
+            )
+
+    async def procesar_respuesta_coordinador(
+        self, comportamiento: CyclicBehaviour, msg: Message
+    ) -> None:
+        perf = (msg.get_metadata("performative") or "").upper()
+        conv_id = msg.get_metadata("conversation_id") or msg.thread or "conv-default"
+        contenido = msg.body or ""
+        payload = extraer_payload_fipa(msg)
+        canal = str(payload.get("canal", "WhatsApp"))
+        id_cliente = str(payload.get("id_cliente", "cliente_001"))
+
+        if perf == "AGREE":
+            # El Coordinador aceptó delegar el caso al especialista
+            return
+
+        if perf == "INFORM" and "entregar_cotizacion" in contenido:
+            valor_total = float(payload.get("valor_total", 0.0))
+            desglose = payload.get("desglose", {})
+            texto_cot = (
+                f"Tu cotización formal estimada para '{desglose.get('servicio', 'Servicio TI')}' "
+                f"es de ${valor_total:,.0f} COP (Ingeniería: ${desglose.get('costo_ingenieria_base_cop', 0):,.0f} COP, "
+                f"Complejidad/Urgencia: ${desglose.get('ajuste_complejidad_urgencia_cop', 0):,.0f} COP)."
+            )
+            res = self.responderLenguajeNatural("cotizacion_formal", canal, id_cliente, texto_cot)
+            self.marcar_ciclo_completado(
+                {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res}
+            )
+
+        elif perf == "REQUEST" and "solicitar_parametros_faltantes" in contenido:
+            faltantes = payload.get("faltantes", ["horas_estimadas"])
+            texto_aclaracion = (
+                "Para entregarte una cotización exacta necesito confirmar los siguientes "
+                f"parámetros obligatorios: {', '.join(faltantes)}."
+            )
+            res = self.responderLenguajeNatural("pregunta_aclaratoria", canal, id_cliente, texto_aclaracion)
+            self.marcar_ciclo_completado(
+                {"resultado": "parametros_incompletos", "faltantes": faltantes, "envio": res}
+            )
+
+        elif perf == "INFORM" and "transferir_promocion" in contenido:
+            descuento = float(payload.get("descuento_porciento", 10.0))
+            valor_final = float(payload.get("valor_con_descuento", 4_050_000.0))
+            res = self.presentarPromocionAlCliente(
+                descuento_porciento=descuento,
+                canal=canal,
+                id_cliente=id_cliente,
+                valor_final=valor_final,
+            )
+            self.marcar_ciclo_completado(
+                {"resultado": "promocion_presentada", "descuento_porciento": descuento, "valor_final": valor_final, "envio": res}
+            )
+
+        elif perf == "REFUSE" and "descuento_no_viable" in contenido:
+            texto_refuse = (
+                "En este momento no es posible aplicar un descuento adicional sin afectar la "
+                "calidad del servicio, por lo que mantenemos la tarifa base formal."
+            )
+            res = self.responderLenguajeNatural("mantener_tarifa_base", canal, id_cliente, texto_refuse)
+            self.marcar_ciclo_completado(
+                {"resultado": "descuento_rechazado", "envio": res}
+            )
+
+        elif perf == "INFORM" and "reserva_confirmada" in contenido:
+            fecha_hora = str(payload.get("fecha_hora", ""))
+            texto_cita = f"¡Cita confirmada exitosamente para el {fecha_hora}! Te hemos enviado el recordatorio."
+            res = self.responderLenguajeNatural("confirmacion_cita", canal, id_cliente, texto_cita)
+            self.marcar_ciclo_completado(
+                {"resultado": "cita_confirmada", "fecha_hora": fecha_hora, "envio": res}
+            )
+
+        elif perf == "INFORM" and "ofrecer_alternativas" in contenido:
+            alternativas = payload.get("alternativas", [])
+            texto_alt = (
+                "El horario solicitado ya se encuentra ocupado en nuestra agenda. "
+                f"Te propongo estos bloques disponibles: {', '.join(alternativas)}."
+            )
+            res = self.responderLenguajeNatural("sugerir_horarios_alternativos", canal, id_cliente, texto_alt)
+            self.marcar_ciclo_completado(
+                {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res}
+            )
+
+        elif perf == "CANCEL" and "cancelar_accion" in contenido:
+            self._automatizacion_activa = False
+            self.registrar_accion("pausarChatAutomatico()", f"cliente={id_cliente}")
+            await self.enviar_fipa(
+                comportamiento,
+                JID_COORDINADOR,
+                "CONFIRM",
+                "(automatizacion_pausada chat_cliente)",
+                protocolo="FIPA-Request",
+                conversation_id=conv_id,
+                payload_extra={"id_cliente": id_cliente},
+            )
+            self.marcar_ciclo_completado({"resultado": "automatizacion_pausada", "id_cliente": id_cliente})
