@@ -1,96 +1,94 @@
 # SistemaMultiagenteComercial
 
-**Autores:** Owen Badel, Maverick Diaz, Jesus Viloria  
-**Docente:** Juan Puello  
-**Institucion:** Fundacion Internacional Colombo (Unicolombo)  
-**Ecosistema tecnologico:** Python 3.12, SPADE (`spade`), Scikit-Learn (`scikit-learn`), FastAPI, Uvicorn, Botpress y Supabase (PostgreSQL en la nube).
+Sistema multiagente comercial en Python construido con **SPADE**, **Scikit-Learn**, **FastAPI**, **Supabase**, **Google Calendar API v3** y **Botpress**. Disenado para operar de forma generica con cualquier trabajador independiente o negocio leyendo su catalogo, reglas comerciales, precios historicos y configuracion directamente desde base de datos en la nube.
 
 ---
 
-## 1. Descripcion General
+## 1. Como Funciona el Proyecto
 
-`SistemaMultiagenteComercial` implementa una arquitectura multiagente general basada en el modelo organizacional **MAS-ML** y el estandar **FIPA-ACL** sobre SPADE (con servidor XMPP embebido PyJabber), disenada para adaptarse a **cualquier trabajador independiente o negocio** leyendo su configuracion, catalogo de servicios, historicos ML, agenda y clientes directamente desde una base de datos en la nube (**Supabase PostgreSQL**, con respaldo automatico **SQLite** para pruebas locales).
+```text
+Cliente (WhatsApp / Webchat / Instagram / Messenger)
+  -> Botpress (pasarela de canales y alertas salientes al dueno)
+  -> POST /api/botpress/mensaje (FastAPI)
+  -> ServicioMultiagenteComercial (5 agentes SPADE sobre XMPP embebido)
+       |-- EntornoVirtualAtencion <-> Supabase PostgreSQL (negocio, catalogo, ML, perfiles, alertas)
+       |-- EntornoVirtualAtencion <-> Google Calendar API v3 (disponibilidad y citas reales)
+  <- JSON { respuesta, responder_al_cliente, pausado_humano, notificar_dueno, ... }
+```
 
-Botpress actua unicamente como pasarela de canales (WhatsApp, Webchat, Messenger e Instagram) enviando cada mensaje entrante a `POST /api/botpress/mensaje`.
+1. **Atencion multicanal via Botpress:** Todo mensaje entrante de un cliente llega al endpoint `POST /api/botpress/mensaje`.
+2. **Negocio 100% definido por base de datos:** Al iniciar, el sistema carga desde Supabase (`NEGOCIO_ID`) el rubro, moneda, unidad de cobro (`horas`, `sesiones`, etc.), catalogo de servicios, palabras clave, margenes minimos y topes de descuento.
+3. **Procesamiento colaborativo en SPADE + Scikit-Learn:** Los agentes analizan la intencion del cliente, muestran el portafolio, liquidan cotizaciones con `RandomForestRegressor`, calculan incentivos con `KNeighborsRegressor`, consultan/reservan citas reales en Google Calendar y ejecutan escalamiento **Human-in-the-Loop** por chat cuando detectan un caso critico.
+4. **Control Human-in-the-Loop aislado por chat:** Si un cliente entra en atencion humana, el sistema pausa unicamente ese `id_cliente`, marca `notificar_dueno: true` para que Botpress avise al WhatsApp personal del dueno, y devuelve `responder_al_cliente: false` en mensajes posteriores mientras el dueno responde desde su WhatsApp corporativo. Desde el monitor web (`GET /`) se puede reactivar la automatizacion al terminar.
 
 ---
 
-## 2. Arquitectura Organizacional y Entorno (MAS-ML)
+## 2. Agentes, Capacidades, Arquitectura y Modelos de Machine Learning
 
-- **Organizacion (`<<organization>> SistemaMultiagenteComercial`):** Define por composicion (`<<owns>>`) los 5 roles del sistema y aplica las reglas de escalamiento obligatorio hacia `Coordinador` y el canal centralizado de promociones.
-- **Entorno (`<<environment>> EntornoVirtualAtencion`):** Espacio compartido conectado a `RepositorioEntorno` (`RepositorioSupabase` o `RepositorioSQLite`):
-  - `config_negocio`: nombre del negocio, rubro, moneda, unidad de medida (`horas`, `sesiones`, etc.), `telefono_dueno`, margenes y topes de descuento leidos de BD.
-  - `plataformas`: catalogo dinamico de servicios (`servicios` en BD) y registro multicanal.
-  - `perfilesClientes`: memoria conversacional, tono, cotizacion vigente, parametros parciales y bandera `automatizacion_activa` por chat persistida en BD.
-  - `tarifasYMargenes`: historico de tarifas y ofertas cargado desde BD para entrenar `RandomForestRegressor` y `KNeighborsRegressor`.
-  - `agendaVirtual`: disponibilidad de bloques horarios persistida en BD.
-
-### Agentes, Roles, Arquitecturas y Modelos ML
-
-| Agente (`<<agent>>`) | Rol (`<<role>>`) | Arquitectura | Motor de Machine Learning | Relacion `<control>` |
+| Agente | Rol | Que es capaz de hacer | Arquitectura | Modelo de Machine Learning |
 | :--- | :--- | :--- | :--- | :--- |
-| `AgenteCoordinador` | `Coordinador` | Basado en utilidad | Reglas de utilidad sobre margenes de BD | Supervisa a los otros 4 roles |
-| `AgenteVentas` | `EjecutivoVentas` | Con aprendizaje + Utilidad | NLP (`TfidfVectorizer` + `LogisticRegression`) + catalogo de BD | Subordinado a `Coordinador` |
-| `AgenteCotizaciones` | `LiquidadorCotizaciones` | Con aprendizaje + Metas | `RandomForestRegressor` (Scikit-Learn) | Subordinado a `Coordinador` |
-| `AgentePromociones` | `AnalistaPromociones` | Con aprendizaje + Utilidad | `KNeighborsRegressor` (KNN Scikit-Learn) | Subordinado a `Coordinador` |
-| `AgenteAgendamientos` | `GestorAgenda` | Basado en metas | Consulta y reserva real en Google Calendar API v3 | Subordinado a `Coordinador` |
+| `AgenteVentas` | `EjecutivoVentas` | Unica puerta conversacional con el cliente. Interpreta mensajes, detecta tono (`interesado`, `indeciso`, `hostil`), extrae parametros dinamicamente segun el catalogo de BD, envia el portafolio y comunica cotizaciones, descuentos o citas. | Con aprendizaje y basado en utilidad | Clasificacion NLP con **TF-IDF + LogisticRegression** (Scikit-Learn) + extraccion dinamica por palabras clave de BD |
+| `AgenteCoordinador` | `Coordinador` | Orquesta turnos entre especialistas, enruta peticiones, evalua la utilidad/rentabilidad de las ofertas frente al margen minimo del negocio y suspende la automatizacion de un chat escalandolo al dueno ante casos criticos. | Basado en utilidad | Evaluacion racional de utilidad sobre margenes configurados en BD |
+| `AgenteCotizaciones` | `LiquidadorCotizaciones` | Valida requisitos obligatorios segun el servicio solicitado (pidiendo aclaraciones si faltan datos) y calcula cotizaciones formales con desglose economico usando el historico del negocio. | Con aprendizaje y basado en metas | **RandomForestRegressor** (Scikit-Learn) entrenado con la tabla `tarifas_historicas` |
+| `AgentePromociones` | `AnalistaPromociones` | Evalua promociones vigentes y propone el porcentaje optimo de descuento ante objeciones de precio, equilibrando probabilidad de cierre y margen de ganancia. | Con aprendizaje y basado en utilidad | **KNeighborsRegressor (KNN)** con `StandardScaler` (Scikit-Learn) sobre `historico_ofertas` |
+| `AgenteAgendamientos` | `GestorAgenda` | Verifica disponibilidad real en la agenda del dueno, propone horarios libres alternativos del dia si el bloque esta ocupado y crea la cita confirmada en calendario. | Basado en metas | Integracion directa con **Google Calendar API v3** (`freeBusy` y `events.insert`) |
 
 ---
 
-## 3. Configuracion de Base de Datos (Supabase) y Google Calendar
+## 3. Configuracion (Supabase, Google Calendar y Botpress)
 
 ### Base de datos en la nube (Supabase)
-
-1. Crea un proyecto gratuito en `https://supabase.com/`.
-2. Abre **SQL Editor -> New query** en tu proyecto de Supabase, pega el contenido completo de [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) y presiona **Run**.
-   - El script crea las 7 tablas (`negocios`, `servicios`, `promociones_vigentes`, `tarifas_historicas`, `historico_ofertas`, `perfiles_clientes`, `alertas_humanas`) y carga dos negocios independientes de ejemplo (`tech_freelance` y `estudio_fotografia`).
-3. Ve a **Project Settings -> API** y copia:
-   - **Project URL** -> `SUPABASE_URL`
-   - **service_role (secret) key** -> `SUPABASE_KEY`
-4. Copia `.env.example` como `.env` y completa:
-   ```env
-   SUPABASE_URL=https://tu-proyecto.supabase.co
-   SUPABASE_KEY=tu_service_role_key
-   NEGOCIO_ID=tech_freelance
-   ```
-   *(Si cambias `NEGOCIO_ID=estudio_fotografia` o creas una fila nueva en `negocios` y `servicios`, todo el sistema multiagente cambia de rubro automaticamente sin editar codigo).*
+1. Crea un proyecto en `https://supabase.com/`.
+2. En **SQL Editor -> New query**, pega y ejecuta [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) (crea las 7 tablas: `negocios`, `servicios`, `promociones_vigentes`, `tarifas_historicas`, `historico_ofertas`, `perfiles_clientes`, `alertas_humanas` e incluye los negocios de ejemplo `tech_freelance` y `estudio_fotografia`).
+3. En **Project Settings -> Data API / API Keys**, copia tu **Project URL** (`https://...supabase.co`) y tu **Secret key** (`sb_secret_...`).
 
 ### Agenda real (Google Calendar API v3)
-1. En **Google Cloud Console** habilita **Google Calendar API**, crea una **Service Account** y descarga el archivo JSON de credenciales (ej. `google_service_account.json` en la raiz del proyecto; excluido en `.gitignore`).
-2. Abre **Google Calendar** con la cuenta del dueno y comparte el calendario con el correo `client_email` de esa Service Account dandole permiso **"Hacer cambios en eventos"**.
-3. Agrega en `.env`:
-   ```env
-   GOOGLE_CALENDAR_ID=correo_del_calendario@gmail.com
-   GOOGLE_SERVICE_ACCOUNT_JSON=google_service_account.json
-   GOOGLE_TIMEZONE=America/Bogota
-   ```
+1. En **Google Cloud Console**, habilita **Google Calendar API**, crea una **Service Account** y descarga su archivo JSON (ej. `google_service_account.json` en la raiz del proyecto).
+2. En **Google Calendar**, comparte el calendario del dueno con el `client_email` del JSON otorgando permiso **"Hacer cambios en eventos"**.
+
+### Variables de entorno (`.env`)
+Copia `.env.example` como `.env` y completa tus credenciales:
+
+```env
+SUPABASE_URL=https://tu-proyecto.supabase.co
+SUPABASE_KEY=tu_secret_key
+NEGOCIO_ID=tech_freelance
+
+GOOGLE_CALENDAR_ID=tu_correo@gmail.com
+GOOGLE_SERVICE_ACCOUNT_JSON=google_service_account.json
+GOOGLE_TIMEZONE=America/Bogota
+
+OWNER_WHATSAPP_NUMBER=573001234567
+BOTPRESS_API_KEY=
+HOST=0.0.0.0
+PORT=8000
+```
+
+*(Si no configuras `SUPABASE_URL` o `GOOGLE_CALENDAR_ID`, el proyecto usa respaldo local en SQLite/memoria para desarrollo y pruebas).*
 
 ---
 
-## 4. Ejecucion y Conexion con Botpress
+## 4. Instalacion, Ejecucion y Pruebas
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-Esto inicia:
-- Servidor XMPP embebido (`localhost:5222`) con los 5 agentes SPADE conectados.
-- API puente para Botpress en `http://127.0.0.1:8000/api/botpress/mensaje`.
-- Monitor Web FIPA-ACL y Supervisión Human-in-the-Loop en `http://127.0.0.1:8000/`.
+Servicios disponibles al arrancar:
+- Monitor de Telemetria en Tiempo Real y Supervisión Human-in-the-Loop: `http://127.0.0.1:8000/`
+- Endpoint para Botpress Studio: `POST http://127.0.0.1:8000/api/botpress/mensaje` (exponible con `ngrok http 8000`)
 
-Para conectar Botpress Cloud con tu PC local, expone el puerto `8000`:
-
-```bash
-ngrok http 8000
-```
-
-Cuando un cliente escala a atencion humana (`notificar_dueno: true`), Botpress notifica al WhatsApp personal del dueno (`telefono_dueno` / `OWNER_WHATSAPP_NUMBER`) con los datos del cliente y pausa la automatizacion unicamente en ese chat (`responder_al_cliente: false` en mensajes posteriores hasta reactivar en el monitor).
-
----
-
-## 5. Pruebas Automatizadas
+Pruebas automatizadas:
 
 ```bash
 pytest -v
 ```
+
+---
+
+## @Authors
+
+- **Owen Badel**
+- **Maverick Diaz**
+- **Jesus Viloria**

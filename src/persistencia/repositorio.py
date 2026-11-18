@@ -5,8 +5,6 @@ Repositorios de persistencia para EntornoVirtualAtencion:
 
 Ningun agente contiene datos fijos de negocio: la configuracion del independiente,
 catalogo de servicios, historicos ML, agenda, perfiles y alertas viven en BD.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -377,10 +375,10 @@ class RepositorioSQLite(RepositorioEntorno):
         )
 
         palabras_base = {
-            "desarrollo_web": ["web", "pagina", "página", "sitio", "landing"],
+            "desarrollo_web": ["web", "pagina", "pÃ¡gina", "sitio", "landing"],
             "automatizacion_ia": ["automatiz", "bot", "ia", "inteligencia artificial"],
             "ecommerce": ["tienda", "carrito", "ecommerce", "e-commerce"],
-            "app_movil": ["movil", "móvil", "app", "android", "ios"],
+            "app_movil": ["movil", "mÃ³vil", "app", "android", "ios"],
             "consultoria_cloud": ["cloud", "nube", "devops", "servidor"],
         }
         for clave, info in CATALOGO_SERVICIOS.items():

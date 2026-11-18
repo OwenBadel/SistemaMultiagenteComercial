@@ -1,8 +1,6 @@
 """
 Configuracion del puente API entre Botpress, Supabase PostgreSQL,
 Google Calendar API v3 y SistemaMultiagenteComercial.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 

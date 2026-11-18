@@ -2,8 +2,6 @@
 Implementacion del AgenteVentas (<<play>> rol EjecutivoVentas).
 Arquitectura: Con aprendizaje (NLP para intencion y sentimiento/tono del cliente:
 interesado, indeciso u hostil) y basado en utilidad.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -23,7 +21,7 @@ from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 
 @dataclass
 class PlanAtencionInicial:
-    """Plan MAS-ML para atención empática, envío de catálogo y perfilamiento."""
+    """Plan MAS-ML para atenciÃ³n empÃ¡tica, envÃ­o de catÃ¡logo y perfilamiento."""
 
     nombre: str = "PlanAtencionInicial"
     objetivo: str = "Atender inicialmente en el chat y escalar casos fuera de dominio"
@@ -40,7 +38,7 @@ class PlanCierreConPromo:
 class AgenteVentas(AgenteBaseMASML):
     """
     <<agent>> AgenteVentas:
-    Puerta única de entrada al cliente. Integra NLP con Scikit-Learn y coordina
+    Puerta Ãºnica de entrada al cliente. Integra NLP con Scikit-Learn y coordina
     el escalamiento al AgenteCoordinador.
     """
 
@@ -123,7 +121,7 @@ class AgenteVentas(AgenteBaseMASML):
     def interpretarLenguajeNatural(
         self, texto: str, tipo_evento: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Clasifica intención y detecta tonoCliente usando ModeloNLPVentas."""
+        """Clasifica intenciÃ³n y detecta tonoCliente usando ModeloNLPVentas."""
         analisis = self.modelo_nlp.analizar_mensaje(texto=texto, contexto_tipo=tipo_evento)
         self.creencias["mensajesEntrantes"].append(texto)
         self.creencias["historialCharla"].append({"rol": "cliente", "texto": texto})
@@ -170,7 +168,7 @@ class AgenteVentas(AgenteBaseMASML):
     def responderLenguajeNatural(
         self, tipo_respuesta: str, canal: str, id_cliente: str, mensaje: str
     ) -> Dict[str, Any]:
-        """Envía respuesta natural al cliente mediante EntornoVirtualAtencion."""
+        """EnvÃ­a respuesta natural al cliente mediante EntornoVirtualAtencion."""
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": mensaje}
         )
@@ -214,7 +212,7 @@ class AgenteVentas(AgenteBaseMASML):
         conversation_id: str,
         payload_extra: Dict[str, Any],
     ) -> None:
-        """Escala formalmente el caso hacia el AgenteCoordinador vía FIPA-ACL."""
+        """Escala formalmente el caso hacia el AgenteCoordinador vÃ­a FIPA-ACL."""
         self.registrar_accion("escalarCasoACoordinador()", predicado)
         await self.enviar_fipa(
             comportamiento,
@@ -227,7 +225,7 @@ class AgenteVentas(AgenteBaseMASML):
         )
 
     # ------------------------------------------------------------------
-    # LÓGICA DE ATENCIÓN AL ENTORNO Y RESPUESTAS FIPA DEL COORDINADOR
+    # LÃ“GICA DE ATENCIÃ“N AL ENTORNO Y RESPUESTAS FIPA DEL COORDINADOR
     # ------------------------------------------------------------------
     async def atender_evento_entorno(
         self,
@@ -407,7 +405,7 @@ class AgenteVentas(AgenteBaseMASML):
         id_cliente = str(payload.get("id_cliente", "cliente_001"))
 
         if perf == "AGREE":
-            # El Coordinador aceptó delegar el caso al especialista
+            # El Coordinador aceptÃ³ delegar el caso al especialista
             return
 
         if perf == "INFORM" and "entregar_cotizacion" in contenido:
@@ -439,8 +437,8 @@ class AgenteVentas(AgenteBaseMASML):
             )
             faltantes = payload.get("faltantes", [etiqueta_default])
             texto_aclaracion = (
-                "Para entregarte una cotización exacta necesito confirmar los siguientes "
-                f"parámetros obligatorios: {', '.join(faltantes)}."
+                "Para entregarte una cotizaciÃ³n exacta necesito confirmar los siguientes "
+                f"parÃ¡metros obligatorios: {', '.join(faltantes)}."
             )
             res = self.responderLenguajeNatural("pregunta_aclaratoria", canal, id_cliente, texto_aclaracion)
             self.marcar_ciclo_completado(

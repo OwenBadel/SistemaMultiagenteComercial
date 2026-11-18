@@ -2,8 +2,6 @@
 Implementacion del entorno compartido <<environment>> EntornoVirtualAtencion
 segun el Diagrama de Clases MAS-ML y la Tabla de Analisis del Entorno,
 desacoplado mediante RepositorioEntorno (Supabase en la nube o SQLite local).
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -265,10 +263,6 @@ class EntornoVirtualAtencion:
         )
         self.eventos_disparados: List[Dict[str, Any]] = []
         self._logger_evento = logger_evento
-
-    def configurar_logger_evento(self, callback: Callable[[str, str], None]) -> None:
-        """Conecta el monitor en tiempo real para trazar eventos del entorno."""
-        self._logger_evento = callback
 
     def registrar_habitante(self, nombre_entidad: str) -> None:
         """Materializa la relacion <<inhabit>> entre entorno y organizacion/agentes."""

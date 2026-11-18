@@ -4,8 +4,6 @@ para los agentes con aprendizaje del SistemaMultiagenteComercial:
 - ModeloNLPVentas (TfidfVectorizer + LogisticRegression + extraccion dinamica desde BD)
 - ModeloCotizacionesRF (RandomForestRegressor entrenado con historico de BD)
 - ModeloPromocionesKNN (StandardScaler + KNeighborsRegressor entrenado con ofertas de BD)
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -62,15 +60,6 @@ class ModeloNLPVentas:
         self.modelo_intencion.fit(textos, intenciones)
         self.modelo_tono.fit(textos, tonos)
 
-    def actualizar_catalogo(
-        self,
-        catalogo_servicios: Dict[str, Dict[str, Any]],
-        unidad_cantidad: str = "horas",
-    ) -> None:
-        """Actualiza en vivo el catalogo y la unidad de negocio leidos desde BD."""
-        self.catalogo_servicios = catalogo_servicios
-        self.unidad_cantidad = unidad_cantidad.lower().strip() or "unidades"
-
     def analizar_mensaje(
         self, texto: str, contexto_tipo: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -94,20 +83,20 @@ class ModeloNLPVentas:
         tono_ml = str(clases_tono[int(np.argmax(proba_tono))])
 
         palabras_hostiles = (
-            "robo", "estafa", "estafadores", "pesimo", "pésimo", "harto",
-            "porqueria", "porquería", "denunciar", "furioso", "inaceptable",
-            "humano ya", "bot inutil", "bot inútil", "reclamo", "reclamar",
+            "robo", "estafa", "estafadores", "pesimo", "pÃ©simo", "harto",
+            "porqueria", "porquerÃ­a", "denunciar", "furioso", "inaceptable",
+            "humano ya", "bot inutil", "bot inÃºtil", "reclamo", "reclamar",
         )
         palabras_agenda = (
             "agendar", "agenda", "cita", "reservar", "horario", "fecha",
-            "reunion", "reunión", "calendario", "apartar",
-            "acepto la cotizacion", "acepto la cotización",
+            "reunion", "reuniÃ³n", "calendario", "apartar",
+            "acepto la cotizacion", "acepto la cotizaciÃ³n",
             "acepto la propuesta", "acepto la oferta",
         )
         palabras_objecion = (
             "caro", "costoso", "elevado", "presupuesto", "descuento",
-            "promocion", "promoción", "rebaja", "indeciso", "duda",
-            "pensar", "alto", "excede", "objecion", "objeción",
+            "promocion", "promociÃ³n", "rebaja", "indeciso", "duda",
+            "pensar", "alto", "excede", "objecion", "objeciÃ³n",
             "muy caro", "no me alcanza",
         )
 
@@ -146,7 +135,7 @@ class ModeloNLPVentas:
                 w in texto_norm
                 for w in (
                     "cotiz", "precio", "cuesta", "vale", "presupuesto",
-                    "horas", "sesiones", "unidades", "complejidad", "cuanto", "cuánto",
+                    "horas", "sesiones", "unidades", "complejidad", "cuanto", "cuÃ¡nto",
                 )
             )
         ):
@@ -195,8 +184,8 @@ class ModeloNLPVentas:
 
         # 2. Deteccion generica de cantidad segun la unidad configurada en BD
         unidades_regex = (
-            r"horas?|hrs?|h|sesiones?|sesion|unidades?|unidad|dias?|días?"
-            r"|fotos?|paginas?|páginas?|piezas?|modulos?|módulos?|proyectos?"
+            r"horas?|hrs?|h|sesiones?|sesion|unidades?|unidad|dias?|dÃ­as?"
+            r"|fotos?|paginas?|pÃ¡ginas?|piezas?|modulos?|mÃ³dulos?|proyectos?"
         )
         if self.unidad_cantidad and self.unidad_cantidad not in unidades_regex:
             unidades_regex = f"{re.escape(self.unidad_cantidad)}|{unidades_regex}"
@@ -217,7 +206,7 @@ class ModeloNLPVentas:
         elif "complejidad baja" in texto_norm or "baja complejidad" in texto_norm:
             params["complejidad"] = 2
 
-        match_urg = re.search(r"(?:urgencia|en|para)\s*(\d+)\s*d[ií]as?", texto_norm)
+        match_urg = re.search(r"(?:urgencia|en|para)\s*(\d+)\s*d[iÃ­]as?", texto_norm)
         if match_urg:
             params["urgencia_dias"] = int(match_urg.group(1))
 

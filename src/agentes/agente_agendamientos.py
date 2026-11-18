@@ -3,8 +3,6 @@ Implementacion del AgenteAgendamientos (<<play>> rol GestorAgenda).
 Arquitectura: Basado en metas.
 Previene superposiciones horarias, consulta disponibilidad real en agendaVirtual,
 sugiere bloques alternativos y registra citas confirmadas via QUERY-IF, AGREE y CONFIRM.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -31,7 +29,7 @@ class PlanVerificacionAgenda:
 
 @dataclass
 class PlanRegistroCita:
-    """Plan MAS-ML para reservar definitivamente la cita y notificar confirmación."""
+    """Plan MAS-ML para reservar definitivamente la cita y notificar confirmaciÃ³n."""
 
     nombre: str = "PlanRegistroCita"
     objetivo: str = "Escribir la cita en agendaVirtual y confirmar al Coordinador"
@@ -113,7 +111,7 @@ class AgenteAgendamientos(AgenteBaseMASML):
         return alternativas
 
     def administrarCitaYNotificar(self, fecha_hora: str, nombre_cliente: str) -> Dict[str, Any]:
-        """Registra la cita en agendaVirtual y notifica el éxito de reserva."""
+        """Registra la cita en agendaVirtual y notifica el Ã©xito de reserva."""
         self.registrar_accion(
             "administrarCitaYNotificar()", f"{fecha_hora} | cliente={nombre_cliente}"
         )

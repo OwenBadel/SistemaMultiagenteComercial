@@ -2,8 +2,6 @@
 Runtime SPADE autocontenido compatible con:
 1. Servidor XMPP embebido oficial de SPADE (`spade.run(..., embedded_xmpp_server=True)`).
 2. Modo Contenedor Local SPADE en memoria (para pruebas rapidas con pytest).
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -25,7 +23,7 @@ async def iniciar_agentes_spade(
       contra el servidor PyJabber embebido de SPADE.
     - Con `usar_xmpp_embebido=False`, registra los agentes directamente en el
       `spade.container.Container` enlazado al event loop actual y arranca sus
-      comportamientos asíncronos (`CyclicBehaviour` / `OneShotBehaviour`).
+      comportamientos asÃ­ncronos (`CyclicBehaviour` / `OneShotBehaviour`).
     """
     lista = list(agentes)
     if usar_xmpp_embebido:

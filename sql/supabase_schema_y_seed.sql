@@ -1,6 +1,5 @@
 -- =============================================================================
 -- SistemaMultiagenteComercial - Esquema Relacional y Datos Iniciales Supabase
--- Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 -- Instrucciones:
 --   1. Abre tu proyecto en Supabase -> SQL Editor -> New Query.
 --   2. Pega y ejecuta este script completo una sola vez.
@@ -127,10 +126,10 @@ INSERT INTO servicios (
     negocio_id, clave, servicio_id_num, nombre, descripcion, tarifa_unitaria,
     palabras_clave, requiere_complejidad, costo_adicional_mantenimiento
 ) VALUES
-    ('tech_freelance', 'desarrollo_web', 1, 'Desarrollo Web Corporativo / Landing & Portal', 'Sitio web responsivo, panel administrativo y despliegue en nube.', 85000, '["web","pagina","página","sitio","landing"]'::jsonb, TRUE, 380000),
+    ('tech_freelance', 'desarrollo_web', 1, 'Desarrollo Web Corporativo / Landing & Portal', 'Sitio web responsivo, panel administrativo y despliegue en nube.', 85000, '["web","pagina","pÃ¡gina","sitio","landing"]'::jsonb, TRUE, 380000),
     ('tech_freelance', 'automatizacion_ia', 2, 'Automatizacion Inteligente con Flujos IA & Bots', 'Integracion de asistentes conversacionales, extraccion de datos y APIs.', 125000, '["automatiz","bot","ia","inteligencia artificial"]'::jsonb, TRUE, 380000),
     ('tech_freelance', 'ecommerce', 3, 'Tienda Virtual E-Commerce con Pasarela de Pagos', 'Catalogo interactivo, carrito, inventario y pagos en linea.', 95000, '["tienda","carrito","ecommerce","e-commerce"]'::jsonb, TRUE, 380000),
-    ('tech_freelance', 'app_movil', 4, 'Aplicacion Movil Multiplataforma (Android / iOS)', 'App hibrida conectada a backend REST con notificaciones push.', 115000, '["movil","móvil","app","android","ios"]'::jsonb, TRUE, 380000),
+    ('tech_freelance', 'app_movil', 4, 'Aplicacion Movil Multiplataforma (Android / iOS)', 'App hibrida conectada a backend REST con notificaciones push.', 115000, '["movil","mÃ³vil","app","android","ios"]'::jsonb, TRUE, 380000),
     ('tech_freelance', 'consultoria_cloud', 5, 'Arquitectura Cloud, Migracion y DevOps', 'Contenedores Docker, CI/CD, seguridad y monitoreo en nube.', 110000, '["cloud","nube","devops","servidor"]'::jsonb, TRUE, 380000)
 ON CONFLICT (negocio_id, clave) DO NOTHING;
 
@@ -215,7 +214,7 @@ INSERT INTO servicios (
     negocio_id, clave, servicio_id_num, nombre, descripcion, tarifa_unitaria,
     palabras_clave, requiere_complejidad, costo_adicional_mantenimiento
 ) VALUES
-    ('estudio_fotografia', 'sesion_producto', 1, 'Fotografia de Producto E-Commerce', 'Iluminacion en estudio, fondo limpio y retoque editorial.', 280000, '["producto","catalogo","catálogo","articulo","ecommerce"]'::jsonb, TRUE, 150000),
+    ('estudio_fotografia', 'sesion_producto', 1, 'Fotografia de Producto E-Commerce', 'Iluminacion en estudio, fondo limpio y retoque editorial.', 280000, '["producto","catalogo","catÃ¡logo","articulo","ecommerce"]'::jsonb, TRUE, 150000),
     ('estudio_fotografia', 'retrato_corporativo', 2, 'Retrato Corporativo y Marca Personal', 'Sesion profesional en estudio o locacion con entrega digital.', 320000, '["retrato","corporativo","perfil","marca personal","foto"]'::jsonb, FALSE, 120000),
     ('estudio_fotografia', 'cobertura_evento', 3, 'Cobertura Fotografica de Eventos', 'Registro completo en locacion con edicion de galeria.', 450000, '["evento","boda","grado","conferencia","fiesta"]'::jsonb, TRUE, 200000),
     ('estudio_fotografia', 'video_reel', 4, 'Produccion de Video Reels / Comercial Corto', 'Grabacion 4K, edicion dinamica y colorizacion para redes.', 390000, '["video","reel","reels","comercial","grabacion"]'::jsonb, TRUE, 180000)

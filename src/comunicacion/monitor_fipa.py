@@ -2,8 +2,6 @@
 Logger / Monitor FIPA-ACL en tiempo real con Rich.
 Imprime cada mensaje entre agentes tanto con la etiqueta de 3 lineas (+ estereotipo)
 como en estructura FIPA-ACL (JSON con :sender, :receiver, :content, :ontology, :protocol).
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -48,12 +46,6 @@ class MonitorFIPAACL:
         self.historial_mensajes: List[Dict[str, Any]] = []
         self.historial_eventos_entorno: List[Dict[str, Any]] = []
         self.historial_acciones: List[Dict[str, Any]] = []
-
-    def limpiar(self) -> None:
-        """Reinicia las trazas acumuladas."""
-        self.historial_mensajes.clear()
-        self.historial_eventos_entorno.clear()
-        self.historial_acciones.clear()
 
     def registrar_mensaje_fipa(self, msg: Message) -> Dict[str, Any]:
         """

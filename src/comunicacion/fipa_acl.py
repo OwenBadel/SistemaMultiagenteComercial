@@ -2,8 +2,6 @@
 Estandar de mensajeria FIPA-ACL sobre `spade.message.Message`.
 Configura explicitamente en metadata: performative, ontology="Comercial-SMA",
 protocol ("FIPA-Request", "FIPA-Propose", "FIPA-Query") y stereotype.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 

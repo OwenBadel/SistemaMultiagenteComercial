@@ -1,8 +1,6 @@
 """
 Servidor FastAPI para integracion directa con Botpress (puente hacia WhatsApp,
 Webchat, Messenger e Instagram), Monitor FIPA-ACL en vivo y control Human-in-the-Loop.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 

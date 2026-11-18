@@ -6,8 +6,6 @@ Suite de pruebas automatizadas del SistemaMultiagenteComercial:
    Agendamiento y Escalamiento Human-in-the-Loop).
 4. Integracion API oficial para Botpress (WhatsApp, Webchat, Messenger, Instagram),
    seguridad opcional por API Key y consola Human-in-the-Loop.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 

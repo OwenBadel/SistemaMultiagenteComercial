@@ -3,8 +3,6 @@ Servicio principal del SistemaMultiagenteComercial.
 Ensambla el entorno EntornoVirtualAtencion conectado a Botpress (WhatsApp,
 Webchat, Messenger e Instagram), la organizacion MAS-ML SistemaMultiagenteComercial,
 los modelos de Scikit-Learn y los 5 agentes SPADE sobre XMPP embebido.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 

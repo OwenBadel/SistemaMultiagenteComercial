@@ -5,8 +5,6 @@ y peticiones REST HTTPS con httpx.
 Permite a EntornoVirtualAtencion y AgenteAgendamientos consultar disponibilidad
 real (freeBusy), proponer huecos libres del dia y agendar citas reales en el
 calendario del dueno del negocio.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 

@@ -2,8 +2,6 @@
 Definicion formal de los 5 Roles MAS-ML (<<role>>) del SistemaMultiagenteComercial
 con sus Deberes, Derechos y Restricciones exactos segun el Diagrama de Clases
 y las tablas conceptuales del proyecto.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -20,15 +18,10 @@ class RolMASML:
     derechos: List[str] = field(default_factory=list)
     restricciones: List[str] = field(default_factory=list)
 
-    def validar_permiso(self, accion: str) -> bool:
-        """Verifica que la acción no esté prohibida por las restricciones del rol."""
-        accion_norm = accion.lower()
-        return not any(accion_norm in r.lower() for r in self.restricciones)
-
 
 @dataclass
 class Coordinador(RolMASML):
-    """<<role>> Coordinador — Orquestador de turnos, utilidades y control humano."""
+    """<<role>> Coordinador â€” Orquestador de turnos, utilidades y control humano."""
 
     nombre: str = "Coordinador"
     deberes: List[str] = field(
@@ -55,7 +48,7 @@ class Coordinador(RolMASML):
 
 @dataclass
 class EjecutivoVentas(RolMASML):
-    """<<role>> EjecutivoVentas — Único interlocutor conversacional con el cliente."""
+    """<<role>> EjecutivoVentas â€” Ãšnico interlocutor conversacional con el cliente."""
 
     nombre: str = "EjecutivoVentas"
     deberes: List[str] = field(
@@ -75,7 +68,7 @@ class EjecutivoVentas(RolMASML):
     restricciones: List[str] = field(
         default_factory=lambda: [
             "No puede calcular presupuestos finales",
-            "No puede diseñar o aprobar descuentos por cuenta propia",
+            "No puede diseÃ±ar o aprobar descuentos por cuenta propia",
             "No puede escribir citas en el calendario",
         ]
     )
@@ -83,7 +76,7 @@ class EjecutivoVentas(RolMASML):
 
 @dataclass
 class LiquidadorCotizaciones(RolMASML):
-    """<<role>> LiquidadorCotizaciones — Cálculo económico basado en tarifas y ML."""
+    """<<role>> LiquidadorCotizaciones â€” CÃ¡lculo econÃ³mico basado en tarifas y ML."""
 
     nombre: str = "LiquidadorCotizaciones"
     deberes: List[str] = field(
@@ -108,7 +101,7 @@ class LiquidadorCotizaciones(RolMASML):
 
 @dataclass
 class AnalistaPromociones(RolMASML):
-    """<<role>> AnalistaPromociones — Evaluación de descuentos cuidando rentabilidad."""
+    """<<role>> AnalistaPromociones â€” EvaluaciÃ³n de descuentos cuidando rentabilidad."""
 
     nombre: str = "AnalistaPromociones"
     deberes: List[str] = field(
@@ -133,7 +126,7 @@ class AnalistaPromociones(RolMASML):
 
 @dataclass
 class GestorAgenda(RolMASML):
-    """<<role>> GestorAgenda — Administración y prevención de cruces en calendario."""
+    """<<role>> GestorAgenda â€” AdministraciÃ³n y prevenciÃ³n de cruces en calendario."""
 
     nombre: str = "GestorAgenda"
     deberes: List[str] = field(

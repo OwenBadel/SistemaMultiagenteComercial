@@ -2,8 +2,6 @@
 Implementacion del AgentePromociones (<<play>> rol AnalistaPromociones).
 Arquitectura: Con aprendizaje (KNeighborsRegressor - Regresion KNN de scikit-learn)
 y basado en utilidad.
-
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
@@ -26,12 +24,12 @@ class PlanEvaluarFactibilidad:
     """Plan MAS-ML para validar promociones vigentes y topes de rentabilidad."""
 
     nombre: str = "PlanEvaluarFactibilidad"
-    objetivo: str = "Verificar catálogo de promociones activas y márgenes históricos"
+    objetivo: str = "Verificar catÃ¡logo de promociones activas y mÃ¡rgenes histÃ³ricos"
 
 
 @dataclass
 class PlanSeleccionarDescuento:
-    """Plan MAS-ML para estimar descuento óptimo con KNeighborsRegressor."""
+    """Plan MAS-ML para estimar descuento Ã³ptimo con KNeighborsRegressor."""
 
     nombre: str = "PlanSeleccionarDescuento"
     objetivo: str = "Maximizar cierre cediendo el menor margen posible"
@@ -40,8 +38,8 @@ class PlanSeleccionarDescuento:
 class AgentePromociones(AgenteBaseMASML):
     """
     <<agent>> AgentePromociones:
-    Evalúa incentivos de retención mediante Regresión KNN y envía propuestas
-    únicamente al AgenteCoordinador (canal centralizado de promociones).
+    EvalÃºa incentivos de retenciÃ³n mediante RegresiÃ³n KNN y envÃ­a propuestas
+    Ãºnicamente al AgenteCoordinador (canal centralizado de promociones).
     """
 
     def __init__(
@@ -165,7 +163,7 @@ class AgentePromociones(AgenteBaseMASML):
         if not self.organizacion.aplicar_regla_canal_centralizado_promociones(
             "AnalistaPromociones", "Coordinador"
         ):
-            raise PermissionError("Violación del canal centralizado de promociones")
+            raise PermissionError("ViolaciÃ³n del canal centralizado de promociones")
 
         descuento_pct = float(propuesta["descuento_porciento"])
         etiqueta_pct = f"{int(round(descuento_pct))}_porciento"
@@ -241,7 +239,7 @@ class AgentePromociones(AgenteBaseMASML):
         elif perf == "REJECT-PROPOSAL":
             self.registrar_accion(
                 "registrarRechazoRentabilidad()",
-                "Coordinador rechazó propuesta por margen mínimo",
+                "Coordinador rechazÃ³ propuesta por margen mÃ­nimo",
             )
             self._propuestas_pendientes.pop(conv_id, None)
 

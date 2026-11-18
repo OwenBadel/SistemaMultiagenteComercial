@@ -1,9 +1,6 @@
 """
 Punto de entrada principal de SistemaMultiagenteComercial.
 
-Autores: Owen Badel, Maverick Diaz, Jesus Viloria
-Institucion: Fundacion Internacional Colombo (Unicolombo)
-
 Ejecuta el servidor productivo unificado:
 1. Servidor XMPP embebido de SPADE (PyJabber) y ciclo de vida de los 5 agentes
    MAS-ML (AgenteCoordinador, AgenteVentas, AgenteCotizaciones, AgentePromociones
@@ -101,8 +98,8 @@ def _imprimir_estado_servidor(
     consola.print(
         Panel(
             tabla,
-            title="SistemaMultiagenteComercial - Servicio Botpress Activo",
-            subtitle="Autores: Owen Badel, Maverick Diaz, Jesus Viloria",
+            title="SistemaMultiagenteComercial - Servicio Activo",
+            subtitle="SPADE + Scikit-Learn + Botpress + Supabase + Google Calendar",
             border_style="cyan",
         )
     )
