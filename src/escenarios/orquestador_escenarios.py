@@ -1,8 +1,8 @@
 """
 Servicio principal del SistemaMultiagenteComercial.
-Ensambla el entorno EntornoVirtualAtencion conectado a Meta Graph API,
-la organizacion MAS-ML SistemaMultiagenteComercial, los modelos de Scikit-Learn
-y los 5 agentes SPADE sobre XMPP embebido.
+Ensambla el entorno EntornoVirtualAtencion conectado a Botpress (WhatsApp,
+Webchat, Messenger e Instagram), la organizacion MAS-ML SistemaMultiagenteComercial,
+los modelos de Scikit-Learn y los 5 agentes SPADE sobre XMPP embebido.
 
 Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
@@ -23,8 +23,7 @@ from src.agentes.agente_ventas import AgenteVentas
 from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.comunicacion.spade_runtime import detener_agentes_spade, iniciar_agentes_spade
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
-from src.integracion_meta.cliente_meta import ClienteMetaGraphAPI
-from src.integracion_meta.configuracion import ConfiguracionMeta
+from src.integracion_botpress.configuracion import ConfiguracionBotpress
 from src.ml.datasets import inicializar_datasets
 from src.ml.modelos_ml import (
     ModeloCotizacionesRF,
@@ -37,22 +36,22 @@ from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 class ServicioMultiagenteComercial:
     """
     Orquestador de ejecucion real para el SistemaMultiagenteComercial
-    conectado a canales de Meta (WhatsApp, Instagram, Messenger).
+    conectado con Botpress Studio como pasarela multicanal.
     """
 
     def __init__(
         self,
         ruta_data: Optional[Path] = None,
-        config_meta: Optional[ConfiguracionMeta] = None,
-        cliente_meta: Optional[ClienteMetaGraphAPI] = None,
+        config_botpress: Optional[ConfiguracionBotpress] = None,
         usar_xmpp_embebido: bool = True,
         consola: Optional[Console] = None,
         silencioso: bool = False,
     ) -> None:
         raiz = Path(__file__).resolve().parents[2]
         self.ruta_data = ruta_data or (raiz / "data")
-        self.config_meta = config_meta or ConfiguracionMeta.desde_entorno(raiz / ".env")
-        self.cliente_meta = cliente_meta or ClienteMetaGraphAPI(self.config_meta)
+        self.config_botpress = config_botpress or ConfiguracionBotpress.desde_entorno(
+            raiz / ".env"
+        )
         self.usar_xmpp_embebido = usar_xmpp_embebido
         self.consola = consola or Console()
         self.silencioso = silencioso
@@ -65,13 +64,12 @@ class ServicioMultiagenteComercial:
         self.modelo_rf = ModeloCotizacionesRF(self.df_tarifas)
         self.modelo_knn = ModeloPromocionesKNN(self.df_ofertas)
 
-        # 3. Monitor FIPA-ACL y Entorno MAS-ML conectado a Meta
+        # 3. Monitor FIPA-ACL y Entorno MAS-ML
         self.monitor = MonitorFIPAACL(consola=self.consola, silencioso=self.silencioso)
         self.entorno = EntornoVirtualAtencion(
             tarifas_historicas=self.df_tarifas,
             historico_ofertas=self.df_ofertas,
             logger_evento=self.monitor.registrar_evento_entorno,
-            cliente_meta=self.cliente_meta,
         )
 
         # 4. Organizacion MAS-ML
@@ -129,7 +127,7 @@ class ServicioMultiagenteComercial:
             self._iniciado = False
 
     def imprimir_resumen_inicial(self) -> None:
-        """Muestra la arquitectura MAS-ML y estado de canales Meta en consola."""
+        """Muestra la arquitectura MAS-ML y modelos ML en consola."""
         if self.silencioso:
             return
         tabla = Table(
@@ -174,23 +172,6 @@ class ServicioMultiagenteComercial:
         )
         self.consola.print(tabla)
 
-        estado_meta = self.config_meta.estado_canales()
-        tabla_meta = Table(
-            title="Estado de Conectores Meta Platforms",
-            show_header=True,
-            header_style="bold magenta",
-        )
-        tabla_meta.add_column("Canal / Servicio", style="white")
-        tabla_meta.add_column("Estado Credenciales (.env)", style="bold")
-        for canal, listo in estado_meta.items():
-            tabla_meta.add_row(
-                canal,
-                "[green]CONFIGURADO (Envio real activo)[/green]"
-                if listo
-                else "[yellow]PENDIENTE TOKEN (.env)[/yellow]",
-            )
-        self.consola.print(tabla_meta)
-
     async def _despachar_y_esperar(
         self,
         tipo_evento: str,
@@ -221,7 +202,20 @@ class ServicioMultiagenteComercial:
             await asyncio.sleep(0.05)
             return dict(self.ventas.ultimo_resultado)
 
-    async def procesar_mensaje_entrante_meta(
+    @staticmethod
+    def _extraer_texto_respuesta(resultado: Dict[str, Any], pausado_humano: bool) -> str:
+        """Extrae el texto final emitido por AgenteVentas para devolverlo a Botpress."""
+        envio = resultado.get("envio") or resultado.get("respuesta")
+        if isinstance(envio, dict) and envio.get("contenido"):
+            return str(envio["contenido"])
+        if pausado_humano:
+            return (
+                "Tu caso fue escalado a un asesor humano. En breve continuara la "
+                "atencion por este mismo canal."
+            )
+        return "Solicitud procesada por el sistema multiagente."
+
+    async def procesar_mensaje_entrante(
         self,
         canal: str,
         id_cliente: str,
@@ -231,7 +225,8 @@ class ServicioMultiagenteComercial:
         metadata_extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Punto de entrada real desde los webhooks de WhatsApp, Instagram o Messenger.
+        Punto de entrada principal para mensajes provenientes desde Botpress
+        (WhatsApp, Webchat, Facebook Messenger o Instagram).
         """
         idx_inicio = len(self.monitor.historial_mensajes)
         analisis_previo = self.modelo_nlp.analizar_mensaje(
@@ -247,7 +242,7 @@ class ServicioMultiagenteComercial:
             "texto": texto,
             **(metadata_extra or {}),
         }
-        conv_id = f"meta-{canal.lower()}-{id_cliente}-{len(self.entorno.eventos_disparados) + 1}"
+        conv_id = f"bp-{canal.lower()}-{id_cliente}-{len(self.entorno.eventos_disparados) + 1}"
         resultado = await self._despachar_y_esperar(
             tipo_evento=tipo_evento,
             payload=payload,
@@ -255,11 +250,24 @@ class ServicioMultiagenteComercial:
             esperar_coordinador=esperar_coordinador,
         )
         mensajes_turno = self.monitor.historial_mensajes[idx_inicio:]
+        perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
+        pausado_humano = not bool(perfil.get("automatizacion_activa", True))
+        respuesta_texto = self._extraer_texto_respuesta(resultado, pausado_humano)
+        accion = str(
+            resultado.get("resultado") or resultado.get("accion") or "procesado"
+        )
+
         return {
+            "status": "ok",
             "canal": canal,
             "id_cliente": id_cliente,
             "nombre_cliente": nombre_cliente,
             "texto_recibido": texto,
+            "respuesta": respuesta_texto,
+            "pausado_humano": pausado_humano,
+            "accion": accion,
+            "intencion": analisis_previo["intencion"],
+            "tono_cliente": analisis_previo["tono_cliente"],
             "nlp": analisis_previo,
             "resultado": resultado,
             "mensajes_fipa_turno": mensajes_turno,
@@ -274,11 +282,11 @@ class ServicioMultiagenteComercial:
         self, id_cliente: str, texto: str, canal: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Accion Human-in-the-Loop: permite al profesional humano responder
-        directamente al cliente a traves de WhatsApp, Instagram o Messenger.
+        Accion Human-in-the-Loop: registra la respuesta del asesor humano para
+        el cliente en el canal asociado.
         """
         perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
-        canal_destino = canal or str(perfil.get("canal", "WhatsApp"))
+        canal_destino = canal or str(perfil.get("canal", "Botpress"))
         perfil["historial_interacciones"].append(
             {"rol": "profesional_humano", "texto": texto}
         )
@@ -288,18 +296,14 @@ class ServicioMultiagenteComercial:
             accion="respuesta_directa_humano",
             contenido=texto,
         )
-        envio_meta = await self.entorno.despachar_salida_meta(
-            canal=canal_destino, id_cliente=id_cliente, texto=texto
-        )
         self.monitor.registrar_evento_entorno(
-            f"HumanInTheLoop -> Meta[{canal_destino}]",
+            f"HumanInTheLoop -> Botpress[{canal_destino}]",
             f"cliente={id_cliente} | '{texto}'",
         )
         return {
             "id_cliente": id_cliente,
             "canal": canal_destino,
             "texto": texto,
-            "meta": envio_meta,
         }
 
     def reactivar_automatizacion(self, id_cliente: str) -> Dict[str, Any]:

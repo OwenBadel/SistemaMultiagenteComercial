@@ -4,8 +4,8 @@ Suite de pruebas automatizadas del SistemaMultiagenteComercial:
 2. Datasets (>= 30 registros) y modelos Scikit-Learn (NLP, RandomForest, KNN).
 3. Diagramas de secuencia FIPA-ACL (Escenario 1 alt/else, Escenario 2 alt/else,
    Agendamiento y Escalamiento Human-in-the-Loop).
-4. Integracion real con Meta Platforms (WhatsApp Cloud API, Instagram Direct,
-   Facebook Messenger), verificacion GET /webhook, POST /webhook y API humana.
+4. Integracion API oficial para Botpress (WhatsApp, Webchat, Messenger, Instagram),
+   seguridad opcional por API Key y consola Human-in-the-Loop.
 
 Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
@@ -24,8 +24,8 @@ if str(RAIZ) not in sys.path:
 
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
 from src.escenarios.orquestador_escenarios import ServicioMultiagenteComercial
-from src.integracion_meta.configuracion import ConfiguracionMeta
-from src.integracion_meta.webhook_server import crear_app_meta
+from src.integracion_botpress.configuracion import ConfiguracionBotpress
+from src.integracion_botpress.servidor_botpress import crear_app_botpress
 from src.ml.datasets import inicializar_datasets
 from src.ml.modelos_ml import ModeloCotizacionesRF, ModeloNLPVentas, ModeloPromocionesKNN
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
@@ -131,7 +131,7 @@ def test_modelos_sklearn_y_datasets() -> None:
 
 def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
     """
-    Demuestra Escenario 1 (FIPA-Request) completo en WhatsApp:
+    Demuestra Escenario 1 (FIPA-Request) completo desde Botpress:
     1) Solicitud incompleta -> else [FAILURE parametros_incompletos -> REQUEST aclaracion]
     2) Respuesta con horas y complejidad -> alt [INFORM cotizacion_calculada -> INFORM entregar_cotizacion]
     """
@@ -144,7 +144,7 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
         )
         await servicio.iniciar()
         try:
-            res_incompleta = await servicio.procesar_mensaje_entrante_meta(
+            res_incompleta = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
                 id_cliente="573001112233",
                 nombre_cliente="Laura Gomez",
@@ -154,6 +154,7 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
             assert "REQUEST" in perfs_1b
             assert "AGREE" in perfs_1b
             assert "FAILURE" in perfs_1b
+            assert len(res_incompleta["respuesta"]) > 10
 
             for msg_reg in res_incompleta["mensajes_fipa_turno"]:
                 fipa = msg_reg["fipa_json"]
@@ -161,7 +162,7 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
                 assert fipa[":protocol"] == "FIPA-Request"
                 assert "<<ACL:" in msg_reg["etiqueta_diapositiva"]
 
-            res_completa = await servicio.procesar_mensaje_entrante_meta(
+            res_completa = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
                 id_cliente="573001112233",
                 nombre_cliente="Laura Gomez",
@@ -171,6 +172,7 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
             assert perfs_1a == ["REQUEST", "AGREE", "REQUEST", "AGREE", "INFORM", "INFORM"]
             assert res_completa["resultado"]["resultado"] == "cotizacion_entregada"
             assert res_completa["resultado"]["valor_total"] > 0
+            assert "$" in res_completa["respuesta"]
         finally:
             await servicio.detener()
 
@@ -179,7 +181,7 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
 
 def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
     """
-    Demuestra Escenario 2 (FIPA-Propose) en Instagram:
+    Demuestra Escenario 2 (FIPA-Propose) en canal Webchat:
     - alt [acepta]: PROPOSE -> ACCEPT-PROPOSAL -> INFORM -> promocion presentada
     - else [rechaza]: PROPOSE -> REJECT-PROPOSAL -> REFUSE -> tarifa base mantenida
     """
@@ -192,16 +194,16 @@ def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
         )
         await servicio.iniciar()
         try:
-            await servicio.procesar_mensaje_entrante_meta(
-                canal="Instagram",
-                id_cliente="ig_user_88",
+            await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="web_user_88",
                 nombre_cliente="Carlos Ruiz",
                 texto="Quiero cotizar un ecommerce de 60 horas con complejidad 4",
             )
 
-            res_2a = await servicio.procesar_mensaje_entrante_meta(
-                canal="Instagram",
-                id_cliente="ig_user_88",
+            res_2a = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="web_user_88",
                 nombre_cliente="Carlos Ruiz",
                 texto="El precio esta algo costoso para mi presupuesto",
             )
@@ -216,9 +218,9 @@ def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
             ]
             assert res_2a["resultado"]["resultado"] == "promocion_presentada"
 
-            res_2b = await servicio.procesar_mensaje_entrante_meta(
-                canal="Instagram",
-                id_cliente="ig_user_88",
+            res_2b = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="web_user_88",
                 nombre_cliente="Carlos Ruiz",
                 texto="Necesito un 28% de descuento porque sigue demasiado caro",
             )
@@ -251,14 +253,14 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
         )
         await servicio.iniciar()
         try:
-            await servicio.procesar_mensaje_entrante_meta(
+            await servicio.procesar_mensaje_entrante(
                 canal="Facebook",
                 id_cliente="fb_501",
                 nombre_cliente="Andrea Torres",
                 texto="Cotizar consultoria cloud de 30 horas y complejidad 2",
             )
 
-            res_ocupado = await servicio.procesar_mensaje_entrante_meta(
+            res_ocupado = await servicio.procesar_mensaje_entrante(
                 canal="Facebook",
                 id_cliente="fb_501",
                 nombre_cliente="Andrea Torres",
@@ -267,7 +269,7 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
             assert "QUERY-IF" in _extraer_performativas(res_ocupado["mensajes_fipa_turno"])
             assert res_ocupado["resultado"]["resultado"] == "horarios_alternativos"
 
-            res_libre = await servicio.procesar_mensaje_entrante_meta(
+            res_libre = await servicio.procesar_mensaje_entrante(
                 canal="Facebook",
                 id_cliente="fb_501",
                 nombre_cliente="Andrea Torres",
@@ -289,25 +291,27 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
                 == "OCUPADO"
             )
 
-            res_hostil = await servicio.procesar_mensaje_entrante_meta(
+            res_hostil = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
                 id_cliente="573009998877",
                 nombre_cliente="Pedro Diaz",
                 texto="Esto es una estafa, quiero reclamar con un humano ya",
             )
+            assert res_hostil["pausado_humano"] is True
             assert res_hostil["alerta_humana"] is not None
             assert res_hostil["alerta_humana"]["estado"] == "alerta_recibida_por_profesional"
             perfil_pausado = servicio.entorno.perfilesClientes.perfiles["573009998877"]
             assert perfil_pausado["automatizacion_activa"] is False
             assert len(servicio.entorno.alertas_humanas) >= 1
 
-            res_mientras_pausa = await servicio.procesar_mensaje_entrante_meta(
+            res_mientras_pausa = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
                 id_cliente="573009998877",
                 nombre_cliente="Pedro Diaz",
                 texto="Sigo esperando respuesta",
             )
             assert res_mientras_pausa["resultado"]["resultado"] == "en_atencion_humana"
+            assert res_mientras_pausa["pausado_humano"] is True
 
             envio_manual = await servicio.responder_como_humano(
                 id_cliente="573009998877",
@@ -323,126 +327,92 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
     asyncio.run(_run())
 
 
-def test_endpoints_webhook_meta_whatsapp_instagram_messenger() -> None:
+def test_endpoints_botpress_y_panel_humano() -> None:
     """
-    Prueba los endpoints HTTP reales de FastAPI para Meta:
-    - GET /webhook (verificacion con verify_token valido e invalido)
-    - POST /webhook (payloads oficiales WhatsApp, Instagram Direct y Facebook Messenger)
-    - Panel /, /api/estado, /api/humano/responder, /api/humano/reactivar y calendario
+    Prueba los endpoints HTTP reales de FastAPI para Botpress:
+    - GET /, GET /health
+    - POST /api/botpress/mensaje (formato en espanol y aliases nativos Botpress)
+    - Proteccion opcional con BOTPRESS_API_KEY
+    - Panel /api/estado, /api/humano/responder, /api/humano/reactivar y calendario
     """
 
     async def _run() -> None:
-        config = ConfiguracionMeta(meta_verify_token="token_prueba_unicolombo")
+        config = ConfiguracionBotpress(botpress_api_key="clave_botpress_2026")
         servicio = ServicioMultiagenteComercial(
             ruta_data=RAIZ / "data",
-            config_meta=config,
+            config_botpress=config,
             usar_xmpp_embebido=False,
             silencioso=True,
         )
         await servicio.iniciar()
-        app = crear_app_meta(servicio)
+        app = crear_app_botpress(servicio)
 
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app),
                 base_url="http://testserver",
             ) as client:
-                r_ok = await client.get(
-                    "/webhook",
-                    params={
-                        "hub.mode": "subscribe",
-                        "hub.verify_token": "token_prueba_unicolombo",
-                        "hub.challenge": "99887766",
-                    },
-                )
-                assert r_ok.status_code == 200
-                assert r_ok.text == "99887766"
-
-                r_bad = await client.get(
-                    "/webhook",
-                    params={
-                        "hub.mode": "subscribe",
-                        "hub.verify_token": "token_erroneo",
-                        "hub.challenge": "123",
-                    },
-                )
-                assert r_bad.status_code == 403
-
                 r_panel = await client.get("/")
                 assert r_panel.status_code == 200
                 assert "SistemaMultiagenteComercial" in r_panel.text
 
-                payload_wa = {
-                    "object": "whatsapp_business_account",
-                    "entry": [
-                        {
-                            "changes": [
-                                {
-                                    "value": {
-                                        "contacts": [
-                                            {
-                                                "wa_id": "573101234567",
-                                                "profile": {"name": "Ana Sofia"},
-                                            }
-                                        ],
-                                        "messages": [
-                                            {
-                                                "from": "573101234567",
-                                                "type": "text",
-                                                "text": {
-                                                    "body": "Hola, quiero cotizar una app movil de 50 horas complejidad 3"
-                                                },
-                                            }
-                                        ],
-                                    }
-                                }
-                            ]
-                        }
-                    ],
-                }
-                r_wa = await client.post("/webhook", json=payload_wa)
+                r_health = await client.get("/health")
+                assert r_health.status_code == 200
+                assert r_health.json()["agentes_activos"] == 5
+
+                r_unauth = await client.post(
+                    "/api/botpress/mensaje",
+                    json={"canal": "WhatsApp", "id_cliente": "u1", "texto": "Hola"},
+                )
+                assert r_unauth.status_code == 401
+
+                headers = {"x-api-key": "clave_botpress_2026"}
+
+                r_wa = await client.post(
+                    "/api/botpress/mensaje",
+                    headers=headers,
+                    json={
+                        "canal": "WhatsApp",
+                        "id_cliente": "573101234567",
+                        "nombre": "Ana Sofia",
+                        "texto": "Hola, quiero cotizar una app movil de 50 horas complejidad 3",
+                    },
+                )
                 assert r_wa.status_code == 200
                 data_wa = r_wa.json()
-                assert data_wa["mensajes_procesados"] == 1
-                assert data_wa["resultados"][0]["canal"] == "WhatsApp"
-                assert data_wa["resultados"][0]["resultado"]["resultado"] == "cotizacion_entregada"
+                assert data_wa["canal"] == "WhatsApp"
+                assert data_wa["accion"] == "cotizacion_entregada"
+                assert data_wa["pausado_humano"] is False
+                assert "$" in data_wa["respuesta"]
 
-                payload_ig = {
-                    "object": "instagram",
-                    "entry": [
-                        {
-                            "messaging": [
-                                {
-                                    "sender": {"id": "ig_9001"},
-                                    "message": {"text": "Hola, que servicios ofrecen?"},
-                                }
-                            ]
-                        }
-                    ],
-                }
-                r_ig = await client.post("/webhook", json=payload_ig)
-                assert r_ig.status_code == 200
-                data_ig = r_ig.json()
-                assert data_ig["mensajes_procesados"] == 1
-                assert data_ig["resultados"][0]["canal"] == "Instagram"
-                assert data_ig["resultados"][0]["resultado"]["accion"] == "catalogo_enviado"
+                r_web = await client.post(
+                    "/api/botpress/mensaje",
+                    headers={"Authorization": "Bearer clave_botpress_2026"},
+                    json={
+                        "channel": "Webchat",
+                        "userId": "bp_web_9001",
+                        "text": "Hola, que servicios ofrecen?",
+                    },
+                )
+                assert r_web.status_code == 200
+                data_web = r_web.json()
+                assert data_web["canal"] == "Webchat"
+                assert data_web["accion"] == "catalogo_enviado"
+                assert len(data_web["respuesta"]) > 20
 
-                payload_fb = {
-                    "object": "page",
-                    "entry": [
-                        {
-                            "messaging": [
-                                {
-                                    "sender": {"id": "fb_7001"},
-                                    "message": {"text": "Esto es una estafa, pasame a un humano ya"},
-                                }
-                            ]
-                        }
-                    ],
-                }
-                r_fb = await client.post("/webhook", json=payload_fb)
+                r_fb = await client.post(
+                    "/api/botpress/mensaje",
+                    headers=headers,
+                    json={
+                        "canal": "Facebook",
+                        "id_cliente": "fb_7001",
+                        "texto": "Esto es una estafa, pasame a un humano ya",
+                    },
+                )
                 assert r_fb.status_code == 200
-                assert r_fb.json()["resultados"][0]["alerta_humana"] is not None
+                data_fb = r_fb.json()
+                assert data_fb["pausado_humano"] is True
+                assert data_fb["alerta_humana"] is not None
 
                 r_resp = await client.post(
                     "/api/humano/responder",

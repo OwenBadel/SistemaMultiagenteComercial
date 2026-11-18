@@ -357,11 +357,6 @@ class AgenteCoordinador(AgenteBaseMASML):
                     motivo_critico=motivo_critico,
                     id_cliente=id_cliente,
                 )
-                await self.entorno.despachar_alerta_humana_meta(
-                    motivo_critico=motivo_critico,
-                    id_cliente=id_cliente,
-                    canal=canal,
-                )
                 self.marcar_ciclo_completado(resultado)
 
         elif emisor == "cotizaciones":

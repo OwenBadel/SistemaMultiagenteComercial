@@ -299,14 +299,11 @@ class AgenteVentas(AgenteBaseMASML):
             )
             return
 
-        # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual a Meta
+        # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual
         if tipo_evento == "consulta_servicio" or analisis["intencion"] == "consulta_servicio":
             res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
-            envio_meta = await self.entorno.despachar_salida_meta(
-                canal=canal, id_cliente=id_cliente, texto=str(res["contenido"])
-            )
             self.marcar_ciclo_completado(
-                {"accion": "catalogo_enviado", "respuesta": res, "meta": envio_meta}
+                {"accion": "catalogo_enviado", "respuesta": res}
             )
             return
 
@@ -383,11 +380,8 @@ class AgenteVentas(AgenteBaseMASML):
 
         # Fallback cordial si la intencion no encaja en categorias previas
         res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
-        envio_meta = await self.entorno.despachar_salida_meta(
-            canal=canal, id_cliente=id_cliente, texto=str(res["contenido"])
-        )
         self.marcar_ciclo_completado(
-            {"accion": "catalogo_enviado", "respuesta": res, "meta": envio_meta}
+            {"accion": "catalogo_enviado", "respuesta": res}
         )
 
     async def procesar_respuesta_coordinador(
@@ -413,9 +407,8 @@ class AgenteVentas(AgenteBaseMASML):
                 f"Complejidad/Urgencia: ${desglose.get('ajuste_complejidad_urgencia_cop', 0):,.0f} COP)."
             )
             res = self.responderLenguajeNatural("cotizacion_formal", canal, id_cliente, texto_cot)
-            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_cot)
             self.marcar_ciclo_completado(
-                {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res, "meta": envio_meta}
+                {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res}
             )
 
         elif perf == "REQUEST" and "solicitar_parametros_faltantes" in contenido:
@@ -425,9 +418,8 @@ class AgenteVentas(AgenteBaseMASML):
                 f"parámetros obligatorios: {', '.join(faltantes)}."
             )
             res = self.responderLenguajeNatural("pregunta_aclaratoria", canal, id_cliente, texto_aclaracion)
-            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_aclaracion)
             self.marcar_ciclo_completado(
-                {"resultado": "parametros_incompletos", "faltantes": faltantes, "envio": res, "meta": envio_meta}
+                {"resultado": "parametros_incompletos", "faltantes": faltantes, "envio": res}
             )
 
         elif perf == "INFORM" and "transferir_promocion" in contenido:
@@ -439,11 +431,8 @@ class AgenteVentas(AgenteBaseMASML):
                 id_cliente=id_cliente,
                 valor_final=valor_final,
             )
-            envio_meta = await self.entorno.despachar_salida_meta(
-                canal, id_cliente, str(res["contenido"])
-            )
             self.marcar_ciclo_completado(
-                {"resultado": "promocion_presentada", "descuento_porciento": descuento, "valor_final": valor_final, "envio": res, "meta": envio_meta}
+                {"resultado": "promocion_presentada", "descuento_porciento": descuento, "valor_final": valor_final, "envio": res}
             )
 
         elif perf == "REFUSE" and "descuento_no_viable" in contenido:
@@ -452,18 +441,16 @@ class AgenteVentas(AgenteBaseMASML):
                 "calidad del servicio, por lo que mantenemos la tarifa base formal."
             )
             res = self.responderLenguajeNatural("mantener_tarifa_base", canal, id_cliente, texto_refuse)
-            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_refuse)
             self.marcar_ciclo_completado(
-                {"resultado": "descuento_rechazado", "envio": res, "meta": envio_meta}
+                {"resultado": "descuento_rechazado", "envio": res}
             )
 
         elif perf == "INFORM" and "reserva_confirmada" in contenido:
             fecha_hora = str(payload.get("fecha_hora", ""))
             texto_cita = f"Cita confirmada exitosamente para el {fecha_hora}. Te hemos enviado el recordatorio."
             res = self.responderLenguajeNatural("confirmacion_cita", canal, id_cliente, texto_cita)
-            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_cita)
             self.marcar_ciclo_completado(
-                {"resultado": "cita_confirmada", "fecha_hora": fecha_hora, "envio": res, "meta": envio_meta}
+                {"resultado": "cita_confirmada", "fecha_hora": fecha_hora, "envio": res}
             )
 
         elif perf == "INFORM" and "ofrecer_alternativas" in contenido:
@@ -473,9 +460,8 @@ class AgenteVentas(AgenteBaseMASML):
                 f"Te propongo estos bloques disponibles: {', '.join(alternativas)}."
             )
             res = self.responderLenguajeNatural("sugerir_horarios_alternativos", canal, id_cliente, texto_alt)
-            envio_meta = await self.entorno.despachar_salida_meta(canal, id_cliente, texto_alt)
             self.marcar_ciclo_completado(
-                {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res, "meta": envio_meta}
+                {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res}
             )
 
         elif perf == "CANCEL" and "cancelar_accion" in contenido:
