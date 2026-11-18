@@ -1,16 +1,16 @@
 """
 Modelos de Machine Learning e Inteligencia Artificial con Scikit-Learn
 para los agentes con aprendizaje del SistemaMultiagenteComercial:
-- ModeloNLPVentas (TfidfVectorizer + LogisticRegression)
-- ModeloCotizacionesRF (RandomForestRegressor)
-- ModeloPromocionesKNN (StandardScaler + KNeighborsRegressor)
+- ModeloNLPVentas (TfidfVectorizer + LogisticRegression + extraccion dinamica desde BD)
+- ModeloCotizacionesRF (RandomForestRegressor entrenado con historico de BD)
+- ModeloPromocionesKNN (StandardScaler + KNeighborsRegressor entrenado con ofertas de BD)
 
 Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -28,12 +28,21 @@ from src.ml.datasets import CATALOGO_SERVICIOS, CORPUS_NLP_VENTAS
 
 class ModeloNLPVentas:
     """
-    Clasificador de intención y sentimiento/tono del cliente para AgenteVentas.
-    Combina TF-IDF + Regresión Logística de scikit-learn con extracción de
-    parámetros estructurados y calibración semántica para español comercial.
+    Clasificador de intencion y tono del cliente para AgenteVentas.
+    Usa TF-IDF + LogisticRegression de scikit-learn y extrae parametros
+    dinamicamente usando el catalogo y unidad de medida cargados desde BD.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        catalogo_servicios: Optional[Dict[str, Dict[str, Any]]] = None,
+        unidad_cantidad: str = "horas",
+    ) -> None:
+        self.catalogo_servicios: Dict[str, Dict[str, Any]] = (
+            catalogo_servicios if catalogo_servicios is not None else CATALOGO_SERVICIOS
+        )
+        self.unidad_cantidad: str = unidad_cantidad.lower().strip() or "unidades"
+
         textos = [fila[0] for fila in CORPUS_NLP_VENTAS]
         intenciones = [fila[1] for fila in CORPUS_NLP_VENTAS]
         tonos = [fila[2] for fila in CORPUS_NLP_VENTAS]
@@ -53,7 +62,18 @@ class ModeloNLPVentas:
         self.modelo_intencion.fit(textos, intenciones)
         self.modelo_tono.fit(textos, tonos)
 
-    def analizar_mensaje(self, texto: str, contexto_tipo: Optional[str] = None) -> Dict[str, Any]:
+    def actualizar_catalogo(
+        self,
+        catalogo_servicios: Dict[str, Dict[str, Any]],
+        unidad_cantidad: str = "horas",
+    ) -> None:
+        """Actualiza en vivo el catalogo y la unidad de negocio leidos desde BD."""
+        self.catalogo_servicios = catalogo_servicios
+        self.unidad_cantidad = unidad_cantidad.lower().strip() or "unidades"
+
+    def analizar_mensaje(
+        self, texto: str, contexto_tipo: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Analiza un mensaje entrante retornando:
         - intencion
@@ -73,21 +93,20 @@ class ModeloNLPVentas:
         clases_tono = self.modelo_tono.classes_
         tono_ml = str(clases_tono[int(np.argmax(proba_tono))])
 
-        # Refinamiento híbrido léxico-estructural para alta precisión en entradas libres
         palabras_hostiles = (
-            "robo", "estafa", "estafadores", "pésimo", "pesimo", "harto",
-            "porquería", "porqueria", "denunciar", "furioso", "inaceptable",
-            "humano ya", "bot inútil", "reclamo",
+            "robo", "estafa", "estafadores", "pesimo", "pésimo", "harto",
+            "porqueria", "porquería", "denunciar", "furioso", "inaceptable",
+            "humano ya", "bot inutil", "bot inútil", "reclamo", "reclamar",
         )
         palabras_agenda = (
             "agendar", "agenda", "cita", "reservar", "horario", "fecha",
-            "reunión", "reunion", "calendario", "apartar",
-            "acepto la cotización", "acepto la cotizacion",
+            "reunion", "reunión", "calendario", "apartar",
+            "acepto la cotizacion", "acepto la cotización",
             "acepto la propuesta", "acepto la oferta",
         )
         palabras_objecion = (
             "caro", "costoso", "elevado", "presupuesto", "descuento",
-            "promoción", "promocion", "rebaja", "indeciso", "duda",
+            "promocion", "promoción", "rebaja", "indeciso", "duda",
             "pensar", "alto", "excede", "objecion", "objeción",
             "muy caro", "no me alcanza",
         )
@@ -118,10 +137,18 @@ class ModeloNLPVentas:
                 nivel_indecision = 0.96
             else:
                 nivel_indecision = 0.72
-        elif contexto_tipo == "parametros_servicio" or any(
-            k in parametros for k in ("tipo_servicio", "horas_estimadas", "complejidad")
-        ) and any(
-            w in texto_norm for w in ("cotiz", "precio", "cuesta", "vale", "presupuesto", "horas", "complejidad")
+        elif contexto_tipo == "parametros_servicio" or (
+            any(
+                k in parametros
+                for k in ("tipo_servicio", "cantidad_unidades", "horas_estimadas", "complejidad")
+            )
+            and any(
+                w in texto_norm
+                for w in (
+                    "cotiz", "precio", "cuesta", "vale", "presupuesto",
+                    "horas", "sesiones", "unidades", "complejidad", "cuanto", "cuánto",
+                )
+            )
         ):
             intencion = "solicitud_cotizacion"
             tono = "interesado"
@@ -145,29 +172,40 @@ class ModeloNLPVentas:
             "parametros_extraidos": parametros,
         }
 
-    @staticmethod
-    def _extraer_parametros_texto(texto_norm: str) -> Dict[str, Any]:
-        """Extrae posibles parametros de servicio, descuento solicitado y fecha/hora desde texto libre."""
+    def _extraer_parametros_texto(self, texto_norm: str) -> Dict[str, Any]:
+        """Extrae servicio, cantidad y parametros leyendo las palabras clave de BD."""
         params: Dict[str, Any] = {}
-        for clave_servicio in CATALOGO_SERVICIOS:
-            if clave_servicio in texto_norm or clave_servicio.replace("_", " ") in texto_norm:
+
+        # 1. Deteccion dinamica de servicio desde el catalogo de BD
+        for clave_servicio, meta in self.catalogo_servicios.items():
+            clave_norm = str(clave_servicio).lower()
+            nombre_norm = str(meta.get("nombre", "")).lower()
+            if clave_norm in texto_norm or clave_norm.replace("_", " ") in texto_norm:
                 params["tipo_servicio"] = clave_servicio
                 break
-        if "tipo_servicio" not in params:
-            if any(k in texto_norm for k in ("web", "página", "pagina", "sitio", "landing")):
-                params["tipo_servicio"] = "desarrollo_web"
-            elif any(k in texto_norm for k in ("tienda", "carrito", "ecommerce", "e-commerce")):
-                params["tipo_servicio"] = "ecommerce"
-            elif any(k in texto_norm for k in ("móvil", "movil", "app", "android", "ios")):
-                params["tipo_servicio"] = "app_movil"
-            elif any(k in texto_norm for k in ("automatiz", "bot", "ia", "inteligencia artificial")):
-                params["tipo_servicio"] = "automatizacion_ia"
-            elif any(k in texto_norm for k in ("cloud", "nube", "devops", "servidor")):
-                params["tipo_servicio"] = "consultoria_cloud"
+            palabras = [str(p).lower() for p in meta.get("palabras_clave", [])]
+            if any(p and p in texto_norm for p in palabras):
+                params["tipo_servicio"] = clave_servicio
+                break
+            if nombre_norm and any(
+                len(tok) >= 4 and tok in texto_norm for tok in nombre_norm.split()
+            ):
+                params["tipo_servicio"] = clave_servicio
+                break
 
-        match_horas = re.search(r"(\d+)\s*(?:horas?|hrs?|h)\b", texto_norm)
-        if match_horas:
-            params["horas_estimadas"] = int(match_horas.group(1))
+        # 2. Deteccion generica de cantidad segun la unidad configurada en BD
+        unidades_regex = (
+            r"horas?|hrs?|h|sesiones?|sesion|unidades?|unidad|dias?|días?"
+            r"|fotos?|paginas?|páginas?|piezas?|modulos?|módulos?|proyectos?"
+        )
+        if self.unidad_cantidad and self.unidad_cantidad not in unidades_regex:
+            unidades_regex = f"{re.escape(self.unidad_cantidad)}|{unidades_regex}"
+
+        match_cant = re.search(rf"(\d+)\s*(?:{unidades_regex})\b", texto_norm)
+        if match_cant:
+            cantidad = int(match_cant.group(1))
+            params["cantidad_unidades"] = cantidad
+            params["horas_estimadas"] = cantidad
 
         match_comp = re.search(r"complejidad\s*(?:de\s*)?(\d)", texto_norm)
         if match_comp:
@@ -183,7 +221,8 @@ class ModeloNLPVentas:
         if match_urg:
             params["urgencia_dias"] = int(match_urg.group(1))
 
-        if "mantenimiento" in texto_norm or "soporte" in texto_norm:
+        if any(w in texto_norm for w in ("mantenimiento", "soporte", "edicion", "adicional")):
+            params["incluye_adicional"] = 1
             params["incluye_mantenimiento"] = 1
 
         match_desc = re.search(r"(\d{1,2})\s*%", texto_norm)
@@ -200,77 +239,101 @@ class ModeloNLPVentas:
 class ModeloCotizacionesRF:
     """
     Modelo predictivo de tarifas basado en RandomForestRegressor de scikit-learn,
-    entrenado sobre el histórico de cotizaciones del EntornoVirtualAtencion.
+    entrenado sobre el historico de tarifas de la base de datos del negocio activo.
     """
 
     FEATURES = [
         "tipo_servicio_id",
         "complejidad",
-        "horas_estimadas",
+        "cantidad_unidades",
         "urgencia_dias",
-        "incluye_mantenimiento",
+        "incluye_adicional",
     ]
 
-    def __init__(self, df_tarifas: pd.DataFrame) -> None:
-        self.df_tarifas = df_tarifas.copy()
+    def __init__(
+        self,
+        df_tarifas: pd.DataFrame,
+        catalogo_servicios: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> None:
+        self.catalogo_servicios = (
+            catalogo_servicios if catalogo_servicios is not None else CATALOGO_SERVICIOS
+        )
+        df = df_tarifas.copy()
+        if "cantidad_unidades" not in df.columns and "horas_estimadas" in df.columns:
+            df["cantidad_unidades"] = df["horas_estimadas"]
+        if "incluye_adicional" not in df.columns and "incluye_mantenimiento" in df.columns:
+            df["incluye_adicional"] = df["incluye_mantenimiento"]
+        if "costo_total" not in df.columns and "costo_total_cop" in df.columns:
+            df["costo_total"] = df["costo_total_cop"]
+
+        self.df_tarifas = df
         self.modelo = RandomForestRegressor(
             n_estimators=120,
             max_depth=8,
             random_state=42,
         )
         X = self.df_tarifas[self.FEATURES]
-        y = self.df_tarifas["costo_total_cop"]
+        y = self.df_tarifas["costo_total"]
         self.modelo.fit(X, y)
         pred_train = self.modelo.predict(X)
         self.r2_entrenamiento = float(r2_score(y, pred_train))
-        kf = KFold(n_splits=5, shuffle=True, random_state=42)
+        n_splits = min(5, max(2, len(self.df_tarifas)))
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
         self.r2_validacion = float(cross_val_score(self.modelo, X, y, cv=kf).mean())
 
     def predecir_cotizacion(self, parametros_servicio: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Predice el valor total de la cotización con RandomForestRegressor y
-        construye un desglose económico transparente para el cliente.
+        Predice el valor total de la cotizacion con RandomForestRegressor y
+        construye un desglose economico transparente para el cliente.
         """
         tipo_servicio = str(parametros_servicio["tipo_servicio"])
-        meta_servicio = CATALOGO_SERVICIOS[tipo_servicio]
+        meta_servicio = self.catalogo_servicios[tipo_servicio]
         servicio_id = int(meta_servicio["id"])
         complejidad = int(parametros_servicio.get("complejidad", 3))
-        horas = int(parametros_servicio["horas_estimadas"])
+        cantidad = int(
+            parametros_servicio.get("cantidad_unidades")
+            or parametros_servicio.get("horas_estimadas", 1)
+        )
         urgencia = int(parametros_servicio.get("urgencia_dias", 20))
-        mantenimiento = int(parametros_servicio.get("incluye_mantenimiento", 0))
+        adicional = int(
+            parametros_servicio.get("incluye_adicional")
+            or parametros_servicio.get("incluye_mantenimiento", 0)
+        )
+        costo_extra = float(meta_servicio.get("costo_adicional_mantenimiento", 380_000.0))
 
         muestra = pd.DataFrame(
             [
                 {
                     "tipo_servicio_id": servicio_id,
                     "complejidad": complejidad,
-                    "horas_estimadas": horas,
+                    "cantidad_unidades": cantidad,
                     "urgencia_dias": urgencia,
-                    "incluye_mantenimiento": mantenimiento,
+                    "incluye_adicional": adicional,
                 }
             ]
         )
         valor_predicho = float(self.modelo.predict(muestra)[0])
         valor_total = float(round(valor_predicho, -3))
 
-        # Desglose explicativo coherente con la predicción del bosque aleatorio
-        proporcion_base = 0.72 if mantenimiento == 0 else 0.65
-        costo_ingenieria = round(valor_total * proporcion_base, -2)
+        proporcion_base = 0.72 if adicional == 0 else 0.65
+        costo_adicional_aplicado = costo_extra if adicional else 0.0
+        costo_base = round(valor_total * proporcion_base, -2)
         ajuste_complejidad_urgencia = round(
-            valor_total - costo_ingenieria - (380_000.0 if mantenimiento else 0.0), -2
+            valor_total - costo_base - costo_adicional_aplicado, -2
         )
         if ajuste_complejidad_urgencia < 0:
             ajuste_complejidad_urgencia = 0.0
-            costo_ingenieria = valor_total - (380_000.0 if mantenimiento else 0.0)
+            costo_base = max(0.0, valor_total - costo_adicional_aplicado)
 
         desglose = {
             "servicio": str(meta_servicio["nombre"]),
-            "horas_estimadas": horas,
+            "cantidad_unidades": cantidad,
+            "horas_estimadas": cantidad,
             "complejidad": complejidad,
             "urgencia_dias": urgencia,
-            "costo_ingenieria_base_cop": float(costo_ingenieria),
-            "ajuste_complejidad_urgencia_cop": float(ajuste_complejidad_urgencia),
-            "soporte_mantenimiento_cop": 380_000.0 if mantenimiento else 0.0,
+            "costo_base": float(costo_base),
+            "ajuste_complejidad_urgencia": float(ajuste_complejidad_urgencia),
+            "adicional_mantenimiento": float(costo_adicional_aplicado),
             "r2_modelo_rf": round(self.r2_entrenamiento, 4),
         }
         return {
@@ -281,8 +344,8 @@ class ModeloCotizacionesRF:
 
 class ModeloPromocionesKNN:
     """
-    Modelo predictivo de descuento óptimo basado en KNeighborsRegressor (Regresión KNN)
-    con escalado estándar de características (StandardScaler + KNeighborsRegressor).
+    Modelo predictivo de descuento optimo basado en KNeighborsRegressor (Regresion KNN)
+    con escalado estandar de caracteristicas (StandardScaler + KNeighborsRegressor).
     """
 
     FEATURES = [
@@ -303,7 +366,8 @@ class ModeloPromocionesKNN:
         X = self.df_ofertas[self.FEATURES]
         y = self.df_ofertas["porcentaje_descuento_optimo"]
         self.pipeline.fit(X, y)
-        kf = KFold(n_splits=5, shuffle=True, random_state=42)
+        n_splits = min(5, max(2, len(self.df_ofertas)))
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
         self.r2_entrenamiento = float(
             cross_val_score(self.pipeline, X, y, cv=kf).mean()
         )
@@ -316,8 +380,8 @@ class ModeloPromocionesKNN:
         fidelidad_cliente: int = 1,
     ) -> Dict[str, Any]:
         """
-        Predice el porcentaje de descuento óptimo mediante regresión KNN sobre
-        ofertas históricas y retorna los vecinos cercanos consultados.
+        Predice el porcentaje de descuento optimo mediante regresion KNN sobre
+        ofertas historicas y retorna los vecinos cercanos consultados.
         """
         muestra = pd.DataFrame(
             [
@@ -335,7 +399,8 @@ class ModeloPromocionesKNN:
         scaler: StandardScaler = self.pipeline.named_steps["scaler"]
         knn: KNeighborsRegressor = self.pipeline.named_steps["knn"]
         muestra_esc = scaler.transform(muestra)
-        distancias, indices = knn.kneighbors(muestra_esc, n_neighbors=5)
+        k_actual = min(5, len(self.df_ofertas))
+        distancias, indices = knn.kneighbors(muestra_esc, n_neighbors=k_actual)
 
         vecinos: List[Dict[str, Any]] = []
         for dist, idx_fila in zip(distancias[0], indices[0]):

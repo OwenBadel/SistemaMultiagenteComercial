@@ -24,25 +24,27 @@ from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.comunicacion.spade_runtime import detener_agentes_spade, iniciar_agentes_spade
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
 from src.integracion_botpress.configuracion import ConfiguracionBotpress
-from src.ml.datasets import inicializar_datasets
 from src.ml.modelos_ml import (
     ModeloCotizacionesRF,
     ModeloNLPVentas,
     ModeloPromocionesKNN,
 )
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.persistencia.repositorio import RepositorioEntorno, crear_repositorio
 
 
 class ServicioMultiagenteComercial:
     """
     Orquestador de ejecucion real para el SistemaMultiagenteComercial
-    conectado con Botpress Studio como pasarela multicanal.
+    conectado con Botpress Studio y persistencia dinamica en la nube (Supabase)
+    o respaldo local SQLite.
     """
 
     def __init__(
         self,
         ruta_data: Optional[Path] = None,
         config_botpress: Optional[ConfiguracionBotpress] = None,
+        repositorio: Optional[RepositorioEntorno] = None,
         usar_xmpp_embebido: bool = True,
         consola: Optional[Console] = None,
         silencioso: bool = False,
@@ -56,21 +58,42 @@ class ServicioMultiagenteComercial:
         self.consola = consola or Console()
         self.silencioso = silencioso
 
-        # 1. Inicializacion de datasets historicos (>= 30 registros)
-        self.df_tarifas, self.df_ofertas = inicializar_datasets(self.ruta_data)
+        # 1. Conexion a BD en la nube (Supabase) o respaldo SQLite local
+        if repositorio is not None:
+            self.repositorio = repositorio
+        else:
+            ruta_sqlite = (
+                ":memory:"
+                if self.silencioso and not self.config_botpress.usa_supabase
+                else (raiz / self.config_botpress.sqlite_db_path)
+            )
+            self.repositorio = crear_repositorio(
+                supabase_url=self.config_botpress.supabase_url,
+                supabase_key=self.config_botpress.supabase_key,
+                negocio_id=self.config_botpress.negocio_id,
+                sqlite_path=ruta_sqlite,
+            )
 
-        # 2. Entrenamiento de modelos Scikit-Learn
-        self.modelo_nlp = ModeloNLPVentas()
-        self.modelo_rf = ModeloCotizacionesRF(self.df_tarifas)
-        self.modelo_knn = ModeloPromocionesKNN(self.df_ofertas)
-
-        # 3. Monitor FIPA-ACL y Entorno MAS-ML
+        # 2. Monitor FIPA-ACL y Entorno MAS-ML alimentado desde BD
         self.monitor = MonitorFIPAACL(consola=self.consola, silencioso=self.silencioso)
         self.entorno = EntornoVirtualAtencion(
-            tarifas_historicas=self.df_tarifas,
-            historico_ofertas=self.df_ofertas,
             logger_evento=self.monitor.registrar_evento_entorno,
+            repositorio=self.repositorio,
         )
+        self.df_tarifas = self.entorno.tarifasYMargenes.tarifas_historicas
+        self.df_ofertas = self.entorno.tarifasYMargenes.historico_ofertas
+
+        # 3. Entrenamiento dinamico de modelos Scikit-Learn con los datos del negocio
+        catalogo = self.entorno.plataformas.portafolio_servicios
+        unidad = str(self.entorno.config_negocio.get("unidad_cantidad", "horas"))
+        self.modelo_nlp = ModeloNLPVentas(
+            catalogo_servicios=catalogo,
+            unidad_cantidad=unidad,
+        )
+        self.modelo_rf = ModeloCotizacionesRF(
+            self.df_tarifas, catalogo_servicios=catalogo
+        )
+        self.modelo_knn = ModeloPromocionesKNN(self.df_ofertas)
 
         # 4. Organizacion MAS-ML
         self.organizacion = SistemaMultiagenteComercial(entorno=self.entorno)
@@ -289,6 +312,11 @@ class ServicioMultiagenteComercial:
                 "Ingresa al WhatsApp corporativo para responder directamente."
             )
 
+        telefono_dueno = (
+            self.config_botpress.owner_whatsapp_number
+            or str(self.entorno.config_negocio.get("telefono_dueno", ""))
+        )
+
         return {
             "status": "ok",
             "canal": canal,
@@ -299,7 +327,7 @@ class ServicioMultiagenteComercial:
             "responder_al_cliente": responder_al_cliente,
             "pausado_humano": pausado_humano,
             "notificar_dueno": notificar_dueno,
-            "telefono_dueno": self.config_botpress.owner_whatsapp_number,
+            "telefono_dueno": telefono_dueno,
             "mensaje_notificacion_dueno": mensaje_notificacion_dueno,
             "accion": accion,
             "intencion": analisis_previo["intencion"],
@@ -346,6 +374,7 @@ class ServicioMultiagenteComercial:
         for alerta in self.entorno.alertas_humanas:
             if alerta.get("id_cliente") == id_cliente:
                 alerta["resuelta"] = True
+        self.entorno.repositorio.resolver_alertas_cliente(id_cliente)
         self.coordinador.creencias["estadoAgentes"]["AgenteVentas"] = "activo"
         self.monitor.registrar_evento_entorno(
             "HumanInTheLoop -> SistemaMultiagenteComercial",

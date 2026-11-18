@@ -17,7 +17,6 @@ from src.agentes.base_agente import JID_COORDINADOR, AgenteBaseMASML
 from src.comunicacion.fipa_acl import extraer_payload_fipa
 from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
-from src.ml.datasets import CATALOGO_SERVICIOS
 from src.ml.modelos_ml import ModeloCotizacionesRF
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 
@@ -99,21 +98,32 @@ class AgenteCotizaciones(AgenteBaseMASML):
     def extraerRequerimientos(
         self, parametros_servicio: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Extrae y valida los parámetros obligatorios solicitados por el cliente."""
+        """Extrae y valida los parametros obligatorios segun el catalogo y negocio en BD."""
         self.creencias["parametrosServicio"] = dict(parametros_servicio)
+        catalogo = self.entorno.plataformas.portafolio_servicios
+        cfg = self.entorno.config_negocio
+        etiqueta_cantidad = str(cfg.get("etiqueta_cantidad", "horas_estimadas"))
+        etiqueta_comp = str(cfg.get("etiqueta_complejidad", "complejidad"))
         faltantes: List[str] = []
 
         tipo = parametros_servicio.get("tipo_servicio")
-        if not tipo or str(tipo) not in CATALOGO_SERVICIOS:
+        if not tipo or str(tipo) not in catalogo:
             faltantes.append("tipo_servicio")
 
-        horas = parametros_servicio.get("horas_estimadas")
-        if horas is None or int(horas) <= 0:
-            faltantes.append("horas_estimadas")
+        cantidad = (
+            parametros_servicio.get("cantidad_unidades")
+            or parametros_servicio.get("horas_estimadas")
+        )
+        if cantidad is None or int(cantidad) <= 0:
+            faltantes.append(etiqueta_cantidad)
+
+        requiere_comp = True
+        if tipo and str(tipo) in catalogo:
+            requiere_comp = bool(catalogo[str(tipo)].get("requiere_complejidad", True))
 
         complejidad = parametros_servicio.get("complejidad")
-        if complejidad is None:
-            faltantes.append("complejidad")
+        if requiere_comp and complejidad is None:
+            faltantes.append(etiqueta_comp)
 
         self.registrar_accion(
             "extraerRequerimientos()",
@@ -124,11 +134,12 @@ class AgenteCotizaciones(AgenteBaseMASML):
     def ejecutarCalculoCostos(
         self, parametros_servicio: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Ejecuta el cálculo económico con RandomForestRegressor de scikit-learn."""
+        """Ejecuta el calculo economico con RandomForestRegressor de scikit-learn."""
         prediccion = self.modelo_rf.predecir_cotizacion(parametros_servicio)
+        moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
         self.registrar_accion(
             "ejecutarCalculoCostos()",
-            f"RandomForest -> ${prediccion['valor_total']:,.0f} COP (R2={prediccion['desglose']['r2_modelo_rf']})",
+            f"RandomForest -> ${prediccion['valor_total']:,.0f} {moneda} (R2={prediccion['desglose']['r2_modelo_rf']})",
         )
         return prediccion
 
@@ -139,10 +150,11 @@ class AgenteCotizaciones(AgenteBaseMASML):
         payload_contexto: Dict[str, Any],
         conversation_id: str,
     ) -> None:
-        """Envía al Coordinador el mensaje INFORM con el valor total y desglose."""
+        """Envia al Coordinador el mensaje INFORM con el valor total y desglose."""
+        moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
         self.registrar_accion(
             "enviarCotizacionFormal()",
-            f"total=${cotizacion['valor_total']:,.0f} COP",
+            f"total=${cotizacion['valor_total']:,.0f} {moneda}",
         )
         id_cliente = str(payload_contexto.get("id_cliente", "cliente_001"))
         parametros = dict(payload_contexto.get("parametros_servicio", {}))

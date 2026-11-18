@@ -102,6 +102,8 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
         return {
             "status": "ok",
             "servicio": "SistemaMultiagenteComercial-Botpress",
+            "modo_bd": servicio_sma.repositorio.modo_bd,
+            "negocio_id": servicio_sma.repositorio.negocio_id,
             "agentes_activos": sum(1 for a in servicio_sma.agentes if a.is_alive()),
         }
 
@@ -138,9 +140,18 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
     @app.get("/api/estado")
     async def obtener_estado_sistema() -> Dict[str, Any]:
         """Retorna el estado completo en vivo del SMA, FIPA-ACL y Human-in-the-Loop."""
+        cfg_neg = servicio_sma.entorno.config_negocio
         return {
             "canal_integracion": "Botpress API Bridge",
             "api_key_activa": bool(servicio_sma.config_botpress.botpress_api_key),
+            "modo_bd": servicio_sma.repositorio.modo_bd,
+            "negocio": {
+                "id": servicio_sma.repositorio.negocio_id,
+                "nombre": cfg_neg.get("nombre_negocio", "Independiente"),
+                "rubro": cfg_neg.get("rubro", "Servicios"),
+                "unidad_cantidad": cfg_neg.get("unidad_cantidad", "horas"),
+                "moneda": cfg_neg.get("moneda", "COP"),
+            },
             "modelos_ml": {
                 "random_forest_r2": round(servicio_sma.modelo_rf.r2_entrenamiento, 4),
                 "knn_r2_cv": round(servicio_sma.modelo_knn.r2_entrenamiento, 4),

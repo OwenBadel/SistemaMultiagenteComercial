@@ -67,10 +67,12 @@ def _construir_parser() -> argparse.ArgumentParser:
 def _imprimir_estado_servidor(
     consola: Console,
     config_botpress: ConfiguracionBotpress,
+    servicio: ServicioMultiagenteComercial,
     usar_xmpp: bool,
 ) -> None:
-    """Muestra en consola los endpoints activos para Botpress y Monitor FIPA-ACL."""
+    """Muestra en consola los endpoints activos para Botpress, BD y Monitor FIPA-ACL."""
     host_visible = "127.0.0.1" if config_botpress.host == "0.0.0.0" else config_botpress.host
+    cfg_neg = servicio.entorno.config_negocio
 
     tabla = Table(show_header=True, header_style="bold cyan")
     tabla.add_column("Componente", style="bold")
@@ -79,6 +81,11 @@ def _imprimir_estado_servidor(
     tabla.add_row(
         "Transporte SPADE",
         "XMPP Embebido (PyJabber localhost:5222)" if usar_xmpp else "Bus local asyncio",
+    )
+    tabla.add_row("Base de Datos", servicio.repositorio.modo_bd)
+    tabla.add_row(
+        "Negocio Activo (BD)",
+        f"{cfg_neg.get('nombre_negocio')} [{servicio.repositorio.negocio_id}]",
     )
     tabla.add_row("Panel Web / Monitor FIPA-ACL", f"http://{host_visible}:{config_botpress.port}/")
     tabla.add_row(
@@ -116,7 +123,7 @@ async def _ejecutar_servidor(
 
     await servicio.iniciar()
     servicio.imprimir_resumen_inicial()
-    _imprimir_estado_servidor(consola, config_botpress, usar_xmpp_embebido)
+    _imprimir_estado_servidor(consola, config_botpress, servicio, usar_xmpp_embebido)
 
     app = crear_app_botpress(servicio)
     uvicorn_config = uvicorn.Config(

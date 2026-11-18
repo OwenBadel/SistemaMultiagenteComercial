@@ -462,6 +462,8 @@
         <p>Monitor de Telemetria FIPA-ACL, MAS-ML y Pasarela Botpress</p>
       </div>
       <div class="estado-barra">
+        <span id="badge-bd" class="etiqueta etiqueta-info">BD: conectando...</span>
+        <span id="badge-negocio" class="etiqueta etiqueta-info">Negocio: cargando...</span>
         <span id="badge-api" class="etiqueta etiqueta-info">API Botpress: verificando...</span>
         <span id="badge-ml" class="etiqueta etiqueta-ok">Modelos ML: cargando...</span>
         <button id="btn-polling" type="button" onclick="alternarPolling()">Pausar refresco</button>
@@ -704,6 +706,11 @@
           ? 'POST /api/botpress/mensaje (API Key)'
           : 'POST /api/botpress/mensaje (Activo)';
         apiBadge.className = 'etiqueta etiqueta-ok';
+
+        const neg = data.negocio || {};
+        document.getElementById('badge-bd').textContent = `BD: ${data.modo_bd || 'Local'}`;
+        document.getElementById('badge-negocio').textContent =
+          `Negocio: ${neg.nombre || '--'} (${neg.id || '--'})`;
 
         const ml = data.modelos_ml || {};
         document.getElementById('badge-ml').textContent =

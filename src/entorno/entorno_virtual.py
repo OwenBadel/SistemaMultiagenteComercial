@@ -1,7 +1,7 @@
 """
 Implementacion del entorno compartido <<environment>> EntornoVirtualAtencion
 segun el Diagrama de Clases MAS-ML y la Tabla de Analisis del Entorno,
-integrado con Botpress (WhatsApp, Webchat, Messenger e Instagram).
+desacoplado mediante RepositorioEntorno (Supabase en la nube o SQLite local).
 
 Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
@@ -13,7 +13,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from src.ml.datasets import CATALOGO_SERVICIOS
+from src.persistencia.repositorio import (
+    CATALOGO_DEFAULT_SEED,
+    RepositorioEntorno,
+    RepositorioSQLite,
+)
 
 
 @dataclass
@@ -21,10 +25,10 @@ class RedesSociales:
     """Representa el atributo `plataformas : RedesSociales` del entorno."""
 
     canales_activos: List[str] = field(
-        default_factory=lambda: ["WhatsApp", "Instagram", "Facebook"]
+        default_factory=lambda: ["WhatsApp", "Instagram", "Facebook", "Webchat", "Botpress"]
     )
     portafolio_servicios: Dict[str, Dict[str, Any]] = field(
-        default_factory=lambda: dict(CATALOGO_SERVICIOS)
+        default_factory=lambda: dict(CATALOGO_DEFAULT_SEED)
     )
     bandeja_entrada: List[Dict[str, Any]] = field(default_factory=list)
     bandeja_salida: List[Dict[str, Any]] = field(default_factory=list)
@@ -32,8 +36,8 @@ class RedesSociales:
     def recibir_mensaje_externo(
         self, canal: str, id_cliente: str, texto: str, metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Registra un mensaje entrante desde WhatsApp, Instagram o Facebook."""
-        canal_normalizado = canal if canal in self.canales_activos else "WhatsApp"
+        """Registra un mensaje entrante desde cualquier canal conectado via Botpress."""
+        canal_normalizado = canal.strip() or "WhatsApp"
         registro = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "canal": canal_normalizado,
@@ -62,9 +66,10 @@ class RedesSociales:
 
 @dataclass
 class Informacion:
-    """Representa el atributo `perfilesClientes : Informacion` del entorno."""
+    """Representa el atributo `perfilesClientes : Informacion` sincronizado con BD."""
 
     perfiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    _on_save: Optional[Callable[[Dict[str, Any]], None]] = field(default=None, repr=False)
 
     def obtener_o_crear_perfil(
         self,
@@ -72,7 +77,8 @@ class Informacion:
         nombre: str = "Cliente Potencial",
         canal: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Obtiene el perfil del cliente o inicializa uno nuevo sin sobreescribir el canal."""
+        """Obtiene el perfil del cliente o inicializa uno nuevo persistiendo en BD."""
+        cambio = False
         if id_cliente not in self.perfiles:
             self.perfiles[id_cliente] = {
                 "id_cliente": id_cliente,
@@ -88,51 +94,40 @@ class Informacion:
                 "promocion_aplicada": None,
                 "automatizacion_activa": True,
             }
+            cambio = True
         else:
-            if nombre and nombre != "Cliente Potencial":
+            if nombre and nombre != "Cliente Potencial" and self.perfiles[id_cliente].get("nombre") != nombre:
                 self.perfiles[id_cliente]["nombre"] = nombre
-            if canal is not None:
+                cambio = True
+            if canal is not None and self.perfiles[id_cliente].get("canal") != canal:
                 self.perfiles[id_cliente]["canal"] = canal
+                cambio = True
+        if cambio and self._on_save is not None:
+            self._on_save(self.perfiles[id_cliente])
         return self.perfiles[id_cliente]
 
     def actualizar_perfil(self, id_cliente: str, **campos: Any) -> Dict[str, Any]:
-        """Actualiza campos puntuales en el perfil de un cliente."""
+        """Actualiza campos puntuales en el perfil del cliente y los guarda en BD."""
         perfil = self.obtener_o_crear_perfil(id_cliente)
         perfil.update(campos)
+        if self._on_save is not None:
+            self._on_save(perfil)
         return perfil
 
 
 @dataclass
 class BaseDatos:
-    """
-    Representa el atributo `tarifasYMargenes : BaseDatos` del entorno,
-    con histórico de cotizaciones, ofertas y topes de descuento.
-    """
+    """Representa el atributo `tarifasYMargenes : BaseDatos` del entorno."""
 
     tarifas_historicas: pd.DataFrame
     historico_ofertas: pd.DataFrame
+    margen_base_estimado: float = 0.35
     margen_minimo_ganancia: float = 0.22
-    margen_base_estimado: float = 0.34
     descuento_maximo_permitido: float = 15.0
-    promociones_vigentes: List[Dict[str, Any]] = field(
-        default_factory=lambda: [
-            {
-                "codigo": "PROMO_CIERRE_10",
-                "descripcion": "Incentivo de cierre rápido para clientes indecisos",
-                "descuento_max": 12.0,
-                "activa": True,
-            },
-            {
-                "codigo": "PROMO_FIDELIDAD_15",
-                "descripcion": "Beneficio tope de retención comercial",
-                "descuento_max": 15.0,
-                "activa": True,
-            },
-        ]
-    )
+    promociones_vigentes: List[Dict[str, Any]] = field(default_factory=list)
 
     def consultar_referencias_servicio(self, tipo_servicio: str) -> pd.DataFrame:
-        """Filtra cotizaciones históricas asociadas al servicio solicitado."""
+        """Filtra cotizaciones historicas asociadas al servicio solicitado."""
         if "tipo_servicio" not in self.tarifas_historicas.columns:
             return self.tarifas_historicas
         filtrado = self.tarifas_historicas[
@@ -143,20 +138,15 @@ class BaseDatos:
 
 @dataclass
 class Calendario:
-    """Representa el atributo `agendaVirtual : Calendario` del entorno."""
+    """Representa el atributo `agendaVirtual : Calendario` sincronizado con BD."""
 
-    bloques: Dict[str, Dict[str, Any]] = field(
-        default_factory=lambda: {
-            "2026-11-18 10:00": {"estado": "LIBRE", "cliente": None},
-            "2026-11-18 14:00": {"estado": "OCUPADO", "cliente": "Empresa Alfa SAS"},
-            "2026-11-18 16:00": {"estado": "LIBRE", "cliente": None},
-            "2026-11-19 09:00": {"estado": "LIBRE", "cliente": None},
-            "2026-11-19 11:00": {"estado": "LIBRE", "cliente": None},
-        }
+    bloques: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    _on_save: Optional[Callable[[str, str, Optional[str]], None]] = field(
+        default=None, repr=False
     )
 
     def verificar_disponibilidad(self, fecha_hora: str) -> bool:
-        """Retorna True si el bloque está libre o aún no figura ocupado."""
+        """Retorna True si el bloque esta libre o aun no figura ocupado."""
         bloque = self.bloques.get(fecha_hora)
         if bloque is None:
             return True
@@ -174,36 +164,68 @@ class Calendario:
     def cambiar_estado_bloque(
         self, fecha_hora: str, estado: str, cliente: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Actualiza un bloque en el calendario (LIBRE u OCUPADO)."""
+        """Actualiza la disponibilidad del bloque en memoria y en BD."""
         estado_norm = estado.upper()
         self.bloques[fecha_hora] = {"estado": estado_norm, "cliente": cliente}
+        if self._on_save is not None:
+            self._on_save(fecha_hora, estado_norm, cliente)
         return {"fecha_hora": fecha_hora, "estado": estado_norm, "cliente": cliente}
 
 
 class EntornoVirtualAtencion:
     """
-    Entorno compartido MAS-ML (<<environment>> EntornoVirtualAtencion) donde
-    habitan (<<inhabit>>) la organización SistemaMultiagenteComercial y los 5 agentes.
-    Características del diseño conceptual: Parcialmente observable, Estocástico,
-    Secuencial, Dinámico, Discreto y Multiagente Cooperativo.
+    <<environment>> EntornoVirtualAtencion:
+    Espacio compartido donde habitan la organizacion y los 5 agentes SPADE.
+    Toda la configuracion comercial, catalogo, historico ML, agenda y estado
+    Human-in-the-Loop se carga y persiste mediante `RepositorioEntorno`.
     """
 
     def __init__(
         self,
-        tarifas_historicas: pd.DataFrame,
-        historico_ofertas: pd.DataFrame,
+        tarifas_historicas: Optional[pd.DataFrame] = None,
+        historico_ofertas: Optional[pd.DataFrame] = None,
         logger_evento: Optional[Callable[[str, str], None]] = None,
+        repositorio: Optional[RepositorioEntorno] = None,
     ) -> None:
-        self.plataformas: RedesSociales = RedesSociales()
-        self.perfilesClientes: Informacion = Informacion()
-        self.tarifasYMargenes: BaseDatos = BaseDatos(
-            tarifas_historicas=tarifas_historicas,
-            historico_ofertas=historico_ofertas,
+        self.repositorio: RepositorioEntorno = repositorio or RepositorioSQLite(":memory:")
+        self.config_negocio: Dict[str, Any] = self.repositorio.obtener_configuracion_negocio()
+        catalogo = self.repositorio.obtener_catalogo_servicios() or dict(CATALOGO_DEFAULT_SEED)
+
+        df_tarifas = (
+            tarifas_historicas
+            if tarifas_historicas is not None
+            else self.repositorio.obtener_tarifas_historicas()
         )
-        self.agendaVirtual: Calendario = Calendario()
+        df_ofertas = (
+            historico_ofertas
+            if historico_ofertas is not None
+            else self.repositorio.obtener_historico_ofertas()
+        )
+
+        self.plataformas: RedesSociales = RedesSociales(portafolio_servicios=catalogo)
+        self.perfilesClientes: Informacion = Informacion(
+            perfiles=self.repositorio.listar_perfiles_clientes(),
+            _on_save=self.repositorio.guardar_perfil_cliente,
+        )
+        self.tarifasYMargenes: BaseDatos = BaseDatos(
+            tarifas_historicas=df_tarifas,
+            historico_ofertas=df_ofertas,
+            margen_base_estimado=float(self.config_negocio.get("margen_base", 0.35)),
+            margen_minimo_ganancia=float(self.config_negocio.get("margen_minimo", 0.22)),
+            descuento_maximo_permitido=float(
+                self.config_negocio.get("descuento_maximo", 15.0)
+            ),
+            promociones_vigentes=self.repositorio.obtener_promociones_vigentes(),
+        )
+        self.agendaVirtual: Calendario = Calendario(
+            bloques=self.repositorio.obtener_bloques_agenda(),
+            _on_save=self.repositorio.guardar_bloque_agenda,
+        )
 
         self.habitantes: List[str] = []
-        self.alertas_humanas: List[Dict[str, Any]] = []
+        self.alertas_humanas: List[Dict[str, Any]] = (
+            self.repositorio.listar_alertas_humanas()
+        )
         self.eventos_disparados: List[Dict[str, Any]] = []
         self._logger_evento = logger_evento
 
@@ -212,7 +234,7 @@ class EntornoVirtualAtencion:
         self._logger_evento = callback
 
     def registrar_habitante(self, nombre_entidad: str) -> None:
-        """Materializa la relación <<inhabit>> entre entorno y organización/agentes."""
+        """Materializa la relacion <<inhabit>> entre entorno y organizacion/agentes."""
         if nombre_entidad not in self.habitantes:
             self.habitantes.append(nombre_entidad)
 
@@ -221,7 +243,7 @@ class EntornoVirtualAtencion:
             self._logger_evento(origen, detalle)
 
     # ------------------------------------------------------------------
-    # EVENTOS DEL ENTORNO (no son acciones de agente)
+    # EVENTOS DEL ENTORNO (NO ACCIONES DE AGENTE)
     # ------------------------------------------------------------------
     def eventoLlegadaMensaje(
         self,
@@ -230,7 +252,7 @@ class EntornoVirtualAtencion:
     ) -> Dict[str, Any]:
         """
         Evento del entorno: ingresa un mensaje de un cliente desde redes sociales
-        y se prepara como percepción para AgenteVentas.
+        y se prepara como percepcion para AgenteVentas.
         """
         id_cliente = str(payload.get("id_cliente", "cliente_001"))
         canal = str(payload.get("canal", "WhatsApp"))
@@ -243,6 +265,7 @@ class EntornoVirtualAtencion:
         )
         perfil["fidelidad"] = fidelidad
         perfil["historial_interacciones"].append({"rol": "cliente", "texto": texto})
+        self.repositorio.guardar_perfil_cliente(perfil)
 
         entrada = self.plataformas.recibir_mensaje_externo(
             canal=canal,
@@ -271,8 +294,8 @@ class EntornoVirtualAtencion:
         cliente: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Evento dinámico del entorno: el dueño o una sincronización externa modifica
-        en tiempo real la disponibilidad en agendaVirtual mientras operan los agentes.
+        Evento dinamico del entorno: modifica en tiempo real la disponibilidad
+        en agendaVirtual y persiste en base de datos.
         """
         resultado = self.agendaVirtual.cambiar_estado_bloque(
             fecha_hora=fecha_hora, estado=estado, cliente=cliente
@@ -290,19 +313,22 @@ class EntornoVirtualAtencion:
         return evento
 
     # ------------------------------------------------------------------
-    # INTERACCIÓN DE PERCEPCIÓN Y ACTUACIÓN PARA LOS AGENTES
+    # INTERACCION DE PERCEPCION Y ACTUACION PARA LOS AGENTES
     # ------------------------------------------------------------------
     def consultarTarifasHistoricas(self, parametros_servicio: Dict[str, Any]) -> Dict[str, Any]:
         """Retorna datos(tarifas_historicas) solicitados por AgenteCotizaciones."""
-        tipo = str(parametros_servicio.get("tipo_servicio", "desarrollo_web"))
+        clave_default = next(iter(self.plataformas.portafolio_servicios.keys()), "general")
+        tipo = str(parametros_servicio.get("tipo_servicio", clave_default))
         referencias = self.tarifasYMargenes.consultar_referencias_servicio(tipo)
+        col_total = "costo_total" if "costo_total" in referencias.columns else "costo_total_cop"
+        promedio = float(referencias[col_total].mean()) if not referencias.empty else 0.0
         self._emitir_traza(
             "AgenteCotizaciones <-> EntornoVirtualAtencion",
             f"consultarTarifasHistoricas(servicio={tipo}) -> datos(tarifas_historicas: {len(referencias)} registros)",
         )
         return {
             "registros": len(referencias),
-            "tarifa_promedio_referencia": float(referencias["costo_total_cop"].mean()),
+            "tarifa_promedio_referencia": promedio,
             "margen_estimado_base": self.tarifasYMargenes.margen_base_estimado,
             "dataframe": referencias,
         }
@@ -344,7 +370,7 @@ class EntornoVirtualAtencion:
     def registrarCitaEnCalendario(
         self, fecha_hora: str, cliente: str, estado: str = "OCUPADO"
     ) -> Dict[str, Any]:
-        """Registra de forma efectiva la reserva en agendaVirtual y retorna ok()."""
+        """Registra de forma efectiva la reserva en agendaVirtual y en BD."""
         registro = self.agendaVirtual.cambiar_estado_bloque(
             fecha_hora=fecha_hora, estado=estado, cliente=cliente
         )
@@ -357,9 +383,12 @@ class EntornoVirtualAtencion:
     def registrarRespuestaEntorno(
         self, accion: str, canal: str, id_cliente: str, contenido: Any
     ) -> Dict[str, Any]:
-        """Registra las acciones comunicativas de AgenteVentas hacia el entorno."""
+        """Registra las acciones comunicativas de AgenteVentas y las persiste."""
         perfil = self.perfilesClientes.obtener_o_crear_perfil(id_cliente, canal=canal)
-        perfil["historial_interacciones"].append({"rol": "agente_ventas", "accion": accion, "contenido": contenido})
+        perfil["historial_interacciones"].append(
+            {"rol": "agente_ventas", "accion": accion, "contenido": contenido}
+        )
+        self.repositorio.guardar_perfil_cliente(perfil)
         salida = self.plataformas.emitir_respuesta_canal(
             canal=canal, id_cliente=id_cliente, accion=accion, contenido=contenido
         )
@@ -375,7 +404,7 @@ class EntornoVirtualAtencion:
         motivo_critico: str,
         id_cliente: str = "cliente_001",
     ) -> Dict[str, Any]:
-        """Pausa la automatizacion del cliente y alerta al profesional humano."""
+        """Pausa la automatizacion del cliente en BD y registra la alerta humana."""
         perfil = self.perfilesClientes.actualizar_perfil(
             id_cliente, automatizacion_activa=False
         )
@@ -390,9 +419,9 @@ class EntornoVirtualAtencion:
             "resuelta": False,
         }
         self.alertas_humanas.append(alerta)
+        self.repositorio.registrar_alerta_humana(alerta)
         self._emitir_traza(
             "AgenteCoordinador -> EntornoVirtualAtencion",
             f"pausarYAlertarHumano(motivo='{motivo_critico}') -> ok(alerta_recibida_por_profesional)",
         )
         return alerta
-

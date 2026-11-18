@@ -29,6 +29,7 @@ from src.integracion_botpress.servidor_botpress import crear_app_botpress
 from src.ml.datasets import inicializar_datasets
 from src.ml.modelos_ml import ModeloCotizacionesRF, ModeloNLPVentas, ModeloPromocionesKNN
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.persistencia.repositorio import RepositorioSQLite, RepositorioSupabase
 
 
 def _extraer_performativas(mensajes_fipa: List[dict]) -> List[str]:
@@ -461,3 +462,212 @@ def test_endpoints_botpress_y_panel_humano() -> None:
             await servicio.detener()
 
     asyncio.run(_run())
+
+
+def test_negocio_distinto_dinamico_desde_bd() -> None:
+    """
+    Demuestra que los agentes no tienen logica de negocio quemada: al conectar
+    un negocio completamente distinto en BD ('estudio_fotografia' cotizando por
+    sesiones y sin requerir complejidad en retrato), los mismos 5 agentes cotizan
+    y envian catalogo de fotografia sin cambiar codigo.
+    """
+    repo = RepositorioSQLite(
+        ruta_db=":memory:",
+        negocio_id="estudio_fotografia",
+        auto_seed=False,
+    )
+    conn = repo._conn
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO negocios (
+            id, nombre_negocio, rubro, moneda, unidad_cantidad, etiqueta_cantidad,
+            etiqueta_complejidad, telefono_dueno, margen_base, margen_minimo,
+            descuento_maximo, mensaje_catalogo_intro
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "estudio_fotografia",
+            "Estudio Visual Independiente",
+            "Fotografia Comercial",
+            "COP",
+            "sesiones",
+            "sesiones_requeridas",
+            "complejidad",
+            "573007776655",
+            0.40,
+            0.25,
+            12.0,
+            "Aqui tienes nuestros paquetes de fotografia",
+        ),
+    )
+    cur.execute(
+        """
+        INSERT INTO servicios (
+            negocio_id, clave, servicio_id_num, nombre, descripcion,
+            tarifa_unitaria, palabras_clave, requiere_complejidad,
+            costo_adicional_mantenimiento
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "estudio_fotografia",
+            "retrato_corporativo",
+            1,
+            "Retrato Corporativo y Marca Personal",
+            "Sesion profesional con entrega digital",
+            320_000.0,
+            '["retrato", "corporativo", "foto"]',
+            0,
+            120_000.0,
+        ),
+    )
+    cur.execute(
+        """
+        INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa)
+        VALUES ('estudio_fotografia', 'PACK_10', 'Descuento multi-sesion', 10.0, 1)
+        """
+    )
+    for i in range(1, 16):
+        cur.execute(
+            """
+            INSERT INTO tarifas_historicas (
+                negocio_id, id_cotizacion, tipo_servicio, tipo_servicio_id,
+                complejidad, cantidad_unidades, urgencia_dias, incluye_adicional,
+                costo_base, costo_total, margen_estimado
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "estudio_fotografia",
+                f"FOT-{i:03d}",
+                "retrato_corporativo",
+                1,
+                3,
+                1 + (i % 6),
+                10,
+                i % 2,
+                float((1 + (i % 6)) * 320_000),
+                float((1 + (i % 6)) * 320_000 + (i % 2) * 120_000),
+                0.40,
+            ),
+        )
+    for i in range(1, 16):
+        cur.execute(
+            """
+            INSERT INTO historico_ofertas (
+                negocio_id, id_oferta, monto_cotizado, nivel_indecision,
+                complejidad, fidelidad_cliente, porcentaje_descuento_optimo,
+                cerrado_exitosamente
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("estudio_fotografia", f"OFE-FOT-{i:03d}", 600_000 + i * 50_000, 0.70, 3, 1, 8.0, 1),
+        )
+    cur.execute(
+        "INSERT INTO agenda_bloques VALUES ('estudio_fotografia', '2026-11-20 09:00', 'LIBRE', NULL)"
+    )
+    conn.commit()
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            repositorio=repo,
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            res_cat = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_foto_1",
+                nombre_cliente="Camila",
+                texto="Hola, que servicios ofrecen?",
+            )
+            assert "Retrato Corporativo" in res_cat["respuesta"]
+            assert "sesiones" in res_cat["respuesta"]
+
+            res_cot = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_foto_1",
+                nombre_cliente="Camila",
+                texto="Quiero cotizar 3 sesiones de retrato corporativo",
+            )
+            assert res_cot["accion"] == "cotizacion_entregada"
+            assert "Retrato Corporativo" in res_cot["respuesta"]
+            assert res_cot["resultado"]["valor_total"] > 0
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
+
+def test_repositorio_supabase_rest_api() -> None:
+    """Verifica el cliente REST HTTPS de Supabase sin depender de red externa."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/negocios"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "negocio_nube",
+                        "nombre_negocio": "Consultora Nube",
+                        "rubro": "Asesoria",
+                        "moneda": "USD",
+                        "unidad_cantidad": "horas",
+                        "etiqueta_cantidad": "horas_estimadas",
+                        "etiqueta_complejidad": "complejidad",
+                        "telefono_dueno": "573001119988",
+                        "margen_base": 0.35,
+                        "margen_minimo": 0.22,
+                        "descuento_maximo": 15.0,
+                        "mensaje_catalogo_intro": "Catalogo nube",
+                    }
+                ],
+            )
+        if request.method == "GET" and path.endswith("/servicios"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "clave": "auditoria",
+                        "servicio_id_num": 1,
+                        "nombre": "Auditoria Express",
+                        "descripcion": "Revision integral",
+                        "tarifa_unitaria": 120.0,
+                        "palabras_clave": ["auditoria"],
+                        "requiere_complejidad": True,
+                        "costo_adicional_mantenimiento": 50.0,
+                    }
+                ],
+            )
+        return httpx.Response(200, json=[])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    repo = RepositorioSupabase(
+        supabase_url="https://demo-proyecto.supabase.co",
+        supabase_key="service_role_demo",
+        negocio_id="negocio_nube",
+        http_client=client,
+    )
+    cfg = repo.obtener_configuracion_negocio()
+    assert cfg["moneda"] == "USD"
+    assert cfg["telefono_dueno"] == "573001119988"
+
+    cat = repo.obtener_catalogo_servicios()
+    assert "auditoria" in cat
+    assert cat["auditoria"]["tarifa_unitaria"] == 120.0
+
+    repo.guardar_bloque_agenda("2026-11-22 10:00", "OCUPADO", "Cliente Nube")
+    repo.registrar_alerta_humana(
+        {
+            "timestamp": "2026-11-18T12:00:00",
+            "id_cliente": "u1",
+            "nombre": "Test",
+            "canal": "WhatsApp",
+            "motivo_critico": "reclamo",
+            "historial_charla": [],
+            "estado": "alerta_recibida_por_profesional",
+            "resuelta": False,
+        }
+    )
+    repo.resolver_alertas_cliente("u1")
+

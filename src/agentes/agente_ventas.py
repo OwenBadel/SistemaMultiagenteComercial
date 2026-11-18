@@ -136,12 +136,25 @@ class AgenteVentas(AgenteBaseMASML):
         return analisis
 
     def enviarCatalogoVisual(self, canal: str, id_cliente: str) -> Dict[str, Any]:
-        """Envía el portafolio visual de servicios al cliente a través del entorno."""
-        portafolio = list(self.entorno.plataformas.portafolio_servicios.keys())
+        """Envia el portafolio visual de servicios cargado dinamicamente desde BD."""
+        cfg = self.entorno.config_negocio
+        catalogo = self.entorno.plataformas.portafolio_servicios
+        intro = str(
+            cfg.get(
+                "mensaje_catalogo_intro",
+                "Con gusto te comparto nuestro portafolio de servicios",
+            )
+        )
+        unidad = str(cfg.get("unidad_cantidad", "unidades"))
+        moneda = str(cfg.get("moneda", "COP"))
+        lineas = [
+            f"- {meta.get('nombre', clave)} (desde ${float(meta.get('tarifa_unitaria', meta.get('tarifa_hora_cop', 0))):,.0f} {moneda}/{unidad})"
+            for clave, meta in catalogo.items()
+        ]
         texto_catalogo = (
-            "¡Hola! Con gusto te comparto nuestro portafolio de servicios: "
-            + ", ".join(portafolio)
-            + ". Indícame qué servicio necesitas, horas estimadas, complejidad (1-5) y urgencia."
+            f"Hola! {intro}:\n"
+            + "\n".join(lineas)
+            + f"\nIndicame que servicio necesitas y la cantidad de {unidad} (y complejidad 1-5 si aplica)."
         )
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": texto_catalogo}
@@ -174,11 +187,12 @@ class AgenteVentas(AgenteBaseMASML):
     def presentarPromocionAlCliente(
         self, descuento_porciento: float, canal: str, id_cliente: str, valor_final: float
     ) -> Dict[str, Any]:
-        """Comunica al cliente la promoción previamente autorizada por el Coordinador."""
+        """Comunica al cliente la promocion previamente autorizada por el Coordinador."""
+        moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
         self.creencias["promocionAprobada"] = descuento_porciento
         mensaje = (
             f"Tenemos una oferta especial autorizada para ti: {descuento_porciento:.0f}% de descuento, "
-            f"quedando la inversión en ${valor_final:,.0f} COP. ¿Agendamos tu cita de inicio?"
+            f"quedando el valor final en ${valor_final:,.0f} {moneda}. Agendamos tu cita de inicio?"
         )
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": mensaje}
@@ -401,10 +415,20 @@ class AgenteVentas(AgenteBaseMASML):
         if perf == "INFORM" and "entregar_cotizacion" in contenido:
             valor_total = float(payload.get("valor_total", 0.0))
             desglose = payload.get("desglose", {})
+            moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
+            costo_base = float(
+                desglose.get("costo_base", desglose.get("costo_ingenieria_base_cop", 0))
+            )
+            ajuste = float(
+                desglose.get(
+                    "ajuste_complejidad_urgencia",
+                    desglose.get("ajuste_complejidad_urgencia_cop", 0),
+                )
+            )
             texto_cot = (
-                f"Tu cotización formal estimada para '{desglose.get('servicio', 'Servicio TI')}' "
-                f"es de ${valor_total:,.0f} COP (Ingeniería: ${desglose.get('costo_ingenieria_base_cop', 0):,.0f} COP, "
-                f"Complejidad/Urgencia: ${desglose.get('ajuste_complejidad_urgencia_cop', 0):,.0f} COP)."
+                f"Tu cotizacion formal estimada para '{desglose.get('servicio', 'Servicio')}' "
+                f"es de ${valor_total:,.0f} {moneda} (Base: ${costo_base:,.0f} {moneda}, "
+                f"Ajuste por alcance/urgencia: ${ajuste:,.0f} {moneda})."
             )
             res = self.responderLenguajeNatural("cotizacion_formal", canal, id_cliente, texto_cot)
             self.marcar_ciclo_completado(
@@ -412,7 +436,10 @@ class AgenteVentas(AgenteBaseMASML):
             )
 
         elif perf == "REQUEST" and "solicitar_parametros_faltantes" in contenido:
-            faltantes = payload.get("faltantes", ["horas_estimadas"])
+            etiqueta_default = str(
+                self.entorno.config_negocio.get("etiqueta_cantidad", "cantidad_unidades")
+            )
+            faltantes = payload.get("faltantes", [etiqueta_default])
             texto_aclaracion = (
                 "Para entregarte una cotización exacta necesito confirmar los siguientes "
                 f"parámetros obligatorios: {', '.join(faltantes)}."
