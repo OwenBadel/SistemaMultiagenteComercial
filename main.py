@@ -119,7 +119,6 @@ async def _ejecutar_servidor(
     )
 
     await servicio.iniciar()
-    servicio.imprimir_resumen_inicial()
     _imprimir_estado_servidor(consola, config_botpress, servicio, usar_xmpp_embebido)
 
     app = crear_app_botpress(servicio)

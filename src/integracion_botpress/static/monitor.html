@@ -71,12 +71,6 @@
       color: var(--text-main);
     }
 
-    .identidad p {
-      font-size: 0.875rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-    }
-
     .estado-barra {
       display: flex;
       flex-wrap: wrap;
@@ -173,26 +167,12 @@
       justify-content: space-between;
       align-items: center;
       gap: 8px;
-      margin-bottom: 6px;
     }
 
     .agente-nombre {
       font-size: 0.92rem;
       font-weight: 700;
       color: var(--text-main);
-    }
-
-    .agente-rol {
-      font-family: var(--font-mono);
-      font-size: 0.76rem;
-      color: var(--accent);
-      margin-bottom: 6px;
-    }
-
-    .agente-arq {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      font-variant-numeric: tabular-nums;
     }
 
     .workspace {
@@ -390,27 +370,6 @@
       margin-top: 2px;
     }
 
-    .tabla-agenda {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.82rem;
-    }
-
-    .tabla-agenda th,
-    .tabla-agenda td {
-      text-align: left;
-      padding: 8px 6px;
-      border-bottom: 1px solid var(--border);
-      font-variant-numeric: tabular-nums;
-    }
-
-    .tabla-agenda th {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--text-muted);
-    }
-
     .lista-eventos {
       max-height: 220px;
       overflow-y: auto;
@@ -459,14 +418,10 @@
     <header class="barra-superior">
       <div class="identidad">
         <h1>SistemaMultiagenteComercial</h1>
-        <p>Monitor de Telemetria FIPA-ACL, MAS-ML y Pasarela Botpress</p>
       </div>
       <div class="estado-barra">
-        <span id="badge-bd" class="etiqueta etiqueta-info">BD: conectando...</span>
-        <span id="badge-agenda" class="etiqueta etiqueta-info">Agenda: verificando...</span>
         <span id="badge-negocio" class="etiqueta etiqueta-info">Negocio: cargando...</span>
         <span id="badge-api" class="etiqueta etiqueta-info">API Botpress: verificando...</span>
-        <span id="badge-ml" class="etiqueta etiqueta-ok">Modelos ML: cargando...</span>
         <button id="btn-polling" type="button" onclick="alternarPolling()">Pausar refresco</button>
       </div>
     </header>
@@ -519,25 +474,6 @@
             </div>
           </section>
 
-          <section class="panel" aria-label="Agenda Virtual">
-            <div class="panel-cabecera">
-              <h2>Agenda Virtual (Entorno)</h2>
-            </div>
-            <div class="panel-cuerpo">
-              <table class="tabla-agenda">
-                <thead>
-                  <tr>
-                    <th>Bloque</th>
-                    <th>Estado</th>
-                    <th>Cliente</th>
-                    <th>Accion</th>
-                  </tr>
-                </thead>
-                <tbody id="tabla-agenda-body"></tbody>
-              </table>
-            </div>
-          </section>
-
           <section class="panel" aria-label="Trazas del Entorno">
             <div class="panel-cabecera">
               <h2>Eventos de EntornoVirtualAtencion</h2>
@@ -577,23 +513,12 @@
     }
 
     function renderizarAgentes(data) {
-      const ml = data.modelos_ml || {};
-      const metricasPorAgente = {
-        AgenteCoordinador: 'Utilidad y control (4 subordinados)',
-        AgenteVentas: 'NLP TF-IDF + LogisticRegression',
-        AgenteCotizaciones: `RandomForest R2=${ml.random_forest_r2 ?? '--'} (${ml.registros_tarifas ?? 0} reg.)`,
-        AgentePromociones: `KNN R2=${ml.knn_r2_cv ?? '--'} (${ml.registros_ofertas ?? 0} reg.)`,
-        AgenteAgendamientos: `Metas (${Object.keys(data.agenda_virtual || {}).length} bloques)`
-      };
-
       const html = (data.agentes || []).map(ag => `
         <article class="tarjeta-agente">
           <div class="agente-cabecera">
             <span class="agente-nombre">${escaparHtml(ag.nombre)}</span>
             <span class="etiqueta ${ag.vivo ? 'etiqueta-ok' : 'etiqueta-err'}">${ag.vivo ? 'ACTIVO' : 'DETENIDO'}</span>
           </div>
-          <div class="agente-rol">rol: ${escaparHtml(ag.rol)}</div>
-          <div class="agente-arq">${escaparHtml(metricasPorAgente[ag.nombre] || ag.arquitectura)}</div>
         </article>
       `).join('');
 
@@ -663,27 +588,6 @@
       `).join('');
     }
 
-    function renderizarAgenda(data) {
-      const bloques = Object.entries(data.agenda_virtual || {});
-      const tbody = document.getElementById('tabla-agenda-body');
-      tbody.innerHTML = bloques.map(([fh, info]) => {
-        const ocupado = info.estado === 'OCUPADO';
-        const proximoEstado = ocupado ? 'LIBRE' : 'OCUPADO';
-        return `
-          <tr>
-            <td>${escaparHtml(fh)}</td>
-            <td><span class="etiqueta ${ocupado ? 'etiqueta-warn' : 'etiqueta-ok'}">${escaparHtml(info.estado)}</span></td>
-            <td>${escaparHtml(info.cliente || '--')}</td>
-            <td>
-              <button type="button" class="btn-compacto" onclick="cambiarDisponibilidad('${escaparHtml(fh)}', '${proximoEstado}')">
-                ${ocupado ? 'Liberar' : 'Ocupar'}
-              </button>
-            </td>
-          </tr>
-        `;
-      }).join('');
-    }
-
     function renderizarEventos(data) {
       const eventos = (data.eventos_entorno || []).slice(-18).reverse();
       const box = document.getElementById('lista-eventos');
@@ -709,19 +613,12 @@
         apiBadge.className = 'etiqueta etiqueta-ok';
 
         const neg = data.negocio || {};
-        document.getElementById('badge-bd').textContent = `BD: ${data.modo_bd || 'Local'}`;
-        document.getElementById('badge-agenda').textContent = `Agenda: ${data.modo_agenda || 'Local'}`;
         document.getElementById('badge-negocio').textContent =
-          `Negocio: ${neg.nombre || '--'} (${neg.id || '--'})`;
-
-        const ml = data.modelos_ml || {};
-        document.getElementById('badge-ml').textContent =
-          `RF R2=${ml.random_forest_r2 ?? '--'} | KNN R2=${ml.knn_r2_cv ?? '--'}`;
+          `Negocio: ${neg.nombre || '--'}`;
 
         renderizarAgentes(data);
         renderizarFipa();
         renderizarAlertas(data);
-        renderizarAgenda(data);
         renderizarEventos(data);
 
         const ahora = new Date();
@@ -739,19 +636,6 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id_cliente: idCliente })
-      });
-      await cargarEstado();
-    }
-
-    async function cambiarDisponibilidad(fechaHora, nuevoEstado) {
-      await fetch('/api/calendario/disponibilidad', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fecha_hora: fechaHora,
-          estado: nuevoEstado,
-          cliente: nuevoEstado === 'OCUPADO' ? 'Reserva Manual' : null
-        })
       });
       await cargarEstado();
     }

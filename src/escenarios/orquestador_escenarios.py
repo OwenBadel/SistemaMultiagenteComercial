@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rich.console import Console
-from rich.table import Table
 
 from src.agentes.agente_agendamientos import AgenteAgendamientos
 from src.agentes.agente_coordinador import AgenteCoordinador
@@ -161,52 +160,6 @@ class ServicioMultiagenteComercial:
                 self.agentes, usar_xmpp_embebido=self.usar_xmpp_embebido
             )
             self._iniciado = False
-
-    def imprimir_resumen_inicial(self) -> None:
-        """Muestra la arquitectura MAS-ML y modelos ML en consola."""
-        if self.silencioso:
-            return
-        tabla = Table(
-            title="SistemaMultiagenteComercial - Arquitectura MAS-ML & Modelos ML",
-            show_header=True,
-            header_style="bold cyan",
-        )
-        tabla.add_column("Agente SPADE (<<agent>>)", style="bold white")
-        tabla.add_column("Rol (<<role>>)", style="green")
-        tabla.add_column("Arquitectura / Motor ML", style="yellow")
-        tabla.add_column("Estado / Metrica", style="bright_blue")
-
-        tabla.add_row(
-            "AgenteCoordinador",
-            "Coordinador",
-            "Basado en utilidad (<<control>> x4)",
-            "Activo | Orquestador",
-        )
-        tabla.add_row(
-            "AgenteVentas",
-            "EjecutivoVentas",
-            "NLP (TF-IDF + LogReg) + Utilidad",
-            "Activo | Puerta unica",
-        )
-        tabla.add_row(
-            "AgenteCotizaciones",
-            "LiquidadorCotizaciones",
-            "RandomForestRegressor + Metas",
-            f"R2={self.modelo_rf.r2_entrenamiento:.4f} ({len(self.df_tarifas)} reg.)",
-        )
-        tabla.add_row(
-            "AgentePromociones",
-            "AnalistaPromociones",
-            "KNeighborsRegressor (KNN) + Utilidad",
-            f"R2={self.modelo_knn.r2_entrenamiento:.4f} ({len(self.df_ofertas)} reg.)",
-        )
-        tabla.add_row(
-            "AgenteAgendamientos",
-            "GestorAgenda",
-            "Basado en metas (Calendario)",
-            self.entorno.agendaVirtual.modo,
-        )
-        self.consola.print(tabla)
 
     async def _despachar_y_esperar(
         self,
