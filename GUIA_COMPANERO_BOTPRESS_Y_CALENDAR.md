@@ -87,10 +87,12 @@ En la maquina donde correra el servidor Python:
 
 ## 3. Configuracion en Botpress Studio (`https://studio.botpress.cloud/`)
 
-En tu bot de Botpress (donde ya estan conectados WhatsApp corporativo, Webchat, Instagram o Messenger), Botpress debe actuar **unicamente como puente** hacia nuestra API Python:
+En tu bot de Botpress (donde ya estan conectados WhatsApp corporativo, Webchat, Instagram o Messenger), Botpress actua como la pasarela conversacional de primera linea hacia nuestra API en Python:
 
-### Paso 3.1: Evitar respuestas de la IA nativa de Botpress
-- Asegurate de no tener activa una **Knowledge Base** ni un nodo **Autonomous** respondiendo libremente sobre el flujo principal, para que cada mensaje pase directo a los agentes SPADE en Python.
+### Paso 3.1: Modelo de Responsabilidad (Opcion A: Botpress NLU + Python TF-IDF)
+- **Rol de Botpress:** Captura el mensaje en los canales reales (WhatsApp, Webchat, etc.), gestiona los turnos de conversacion y entrega el texto directamente al backend. De forma opcional, si deseas que el NLU de Botpress identifique la intencion previamente, puede enviar el campo `tipo_evento_sugerido`.
+- **Rol del Backend Python:** El `AgenteVentas` analiza el texto con su modelo Scikit-Learn TF-IDF enriquecido y reglas lexicas, o procesa directamente la sugerencia de Botpress. Los agentes resuelven la cotizacion (Random Forest), el descuento (KNN), la cita en Google Calendar y la respuesta comercial final en milisegundos.
+- **Importante:** Desactiva respuestas automaticas de **Knowledge Base** o nodos **Autonomous** libres que respondan por su cuenta antes de ejecutar el codigo de enlace, para que sea siempre el sistema multiagente quien genere las respuestas de negocio.
 
 ### Paso 3.2: Crear Variables de Flujo (Workflow Variables)
 En el flujo principal de Botpress Studio, crea estas 5 variables en la seccion **Variables**:
@@ -118,7 +120,9 @@ try {
       channel: event.channel || 'WhatsApp',
       userId: event.userId || event.conversationId,
       userName: event.tags?.user?.name || 'Cliente',
-      text: event.preview
+      text: event.preview,
+      // Opcional: si Botpress clasifica la intencion con su NLU/IA, puede sugerirla:
+      // tipo_evento_sugerido: event.nlu?.intent?.name || null
     },
     { headers, timeout: 15000 }
   )
