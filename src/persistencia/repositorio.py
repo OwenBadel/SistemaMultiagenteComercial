@@ -638,25 +638,8 @@ class RepositorioSupabase(RepositorioEntorno):
         http_client: Optional[httpx.Client] = None,
     ) -> None:
         super().__init__(negocio_id=negocio_id)
-        url_limpia = supabase_url.strip().strip('"').strip("'").rstrip("/")
-        if url_limpia.startswith(("sb_publishable_", "sb_secret_", "eyJ")):
-            raise ValueError(
-                "SUPABASE_URL contiene una API Key en lugar de la URL del proyecto. "
-                "Copia tu Project URL (https://<tu-id>.supabase.co) desde "
-                "Supabase -> Project Settings -> Data API."
-            )
-        if url_limpia and not url_limpia.startswith(("http://", "https://")):
-            if ".supabase.co" in url_limpia:
-                url_limpia = f"https://{url_limpia}"
-            else:
-                raise ValueError(
-                    f"SUPABASE_URL invalida ('{url_limpia}'). Debe comenzar con https:// "
-                    "(ej. https://tuproyecto.supabase.co)."
-                )
-        if url_limpia.endswith("/rest/v1"):
-            url_limpia = url_limpia[:-8]
-        key_limpia = supabase_key.strip().strip('"').strip("'")
-        self.base_rest = url_limpia + "/rest/v1"
+        self.base_rest = supabase_url.strip().rstrip("/") + "/rest/v1"
+        key_limpia = supabase_key.strip()
         self.headers = {
             "apikey": key_limpia,
             "Authorization": f"Bearer {key_limpia}",
