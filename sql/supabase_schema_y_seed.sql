@@ -71,14 +71,6 @@ CREATE TABLE IF NOT EXISTS historico_ofertas (
     PRIMARY KEY (negocio_id, id_oferta)
 );
 
-CREATE TABLE IF NOT EXISTS agenda_bloques (
-    negocio_id TEXT NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
-    fecha_hora TEXT NOT NULL,
-    estado TEXT NOT NULL DEFAULT 'LIBRE',
-    cliente TEXT,
-    PRIMARY KEY (negocio_id, fecha_hora)
-);
-
 CREATE TABLE IF NOT EXISTS perfiles_clientes (
     negocio_id TEXT NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
     id_cliente TEXT NOT NULL,
@@ -146,14 +138,6 @@ INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max
     ('tech_freelance', 'PROMO_CIERRE_10', 'Incentivo de cierre rapido para clientes indecisos', 12.0, TRUE),
     ('tech_freelance', 'PROMO_FIDELIDAD_15', 'Beneficio tope de retencion comercial', 15.0, TRUE)
 ON CONFLICT (negocio_id, codigo) DO NOTHING;
-
-INSERT INTO agenda_bloques (negocio_id, fecha_hora, estado, cliente) VALUES
-    ('tech_freelance', '2026-11-18 10:00', 'LIBRE', NULL),
-    ('tech_freelance', '2026-11-18 14:00', 'OCUPADO', 'Empresa Alfa SAS'),
-    ('tech_freelance', '2026-11-18 16:00', 'LIBRE', NULL),
-    ('tech_freelance', '2026-11-19 09:00', 'LIBRE', NULL),
-    ('tech_freelance', '2026-11-19 11:00', 'LIBRE', NULL)
-ON CONFLICT (negocio_id, fecha_hora) DO NOTHING;
 
 INSERT INTO tarifas_historicas (
     negocio_id, id_cotizacion, tipo_servicio, tipo_servicio_id, complejidad,
@@ -240,12 +224,6 @@ ON CONFLICT (negocio_id, clave) DO NOTHING;
 INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa) VALUES
     ('estudio_fotografia', 'PACK_SESIONES_10', 'Descuento para paquetes multi-sesion', 10.0, TRUE)
 ON CONFLICT (negocio_id, codigo) DO NOTHING;
-
-INSERT INTO agenda_bloques (negocio_id, fecha_hora, estado, cliente) VALUES
-    ('estudio_fotografia', '2026-11-20 09:00', 'LIBRE', NULL),
-    ('estudio_fotografia', '2026-11-20 14:00', 'LIBRE', NULL),
-    ('estudio_fotografia', '2026-11-21 10:00', 'OCUPADO', 'Boutique Norte')
-ON CONFLICT (negocio_id, fecha_hora) DO NOTHING;
 
 INSERT INTO tarifas_historicas (
     negocio_id, id_cotizacion, tipo_servicio, tipo_servicio_id, complejidad,

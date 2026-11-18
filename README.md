@@ -43,7 +43,7 @@ Botpress actua unicamente como pasarela de canales (WhatsApp, Webchat, Messenger
 
 1. Crea un proyecto gratuito en `https://supabase.com/`.
 2. Abre **SQL Editor -> New query** en tu proyecto de Supabase, pega el contenido completo de [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) y presiona **Run**.
-   - El script crea las 8 tablas (`negocios`, `servicios`, `promociones_vigentes`, `tarifas_historicas`, `historico_ofertas`, `agenda_bloques`, `perfiles_clientes`, `alertas_humanas`) y carga dos negocios independientes de ejemplo (`tech_freelance` y `estudio_fotografia`).
+   - El script crea las 7 tablas (`negocios`, `servicios`, `promociones_vigentes`, `tarifas_historicas`, `historico_ofertas`, `perfiles_clientes`, `alertas_humanas`) y carga dos negocios independientes de ejemplo (`tech_freelance` y `estudio_fotografia`).
 3. Ve a **Project Settings -> API** y copia:
    - **Project URL** -> `SUPABASE_URL`
    - **service_role (secret) key** -> `SUPABASE_KEY`

@@ -55,16 +55,6 @@ class RepositorioEntorno(ABC):
         ...
 
     @abstractmethod
-    def obtener_bloques_agenda(self) -> Dict[str, Dict[str, Any]]:
-        ...
-
-    @abstractmethod
-    def guardar_bloque_agenda(
-        self, fecha_hora: str, estado: str, cliente: Optional[str] = None
-    ) -> None:
-        ...
-
-    @abstractmethod
     def listar_perfiles_clientes(self) -> Dict[str, Dict[str, Any]]:
         ...
 
@@ -170,16 +160,6 @@ def _mapear_tarifas_df(filas: Iterable[Any]) -> pd.DataFrame:
     return pd.DataFrame(registros)
 
 
-def _mapear_bloques(filas: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
-    return {
-        str(r["fecha_hora"]): {
-            "estado": str(r["estado"]),
-            "cliente": dict(r).get("cliente"),
-        }
-        for r in filas
-    }
-
-
 def _mapear_perfiles(filas: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
     resultado: Dict[str, Dict[str, Any]] = {}
     for row in filas:
@@ -257,16 +237,6 @@ def _promos_default() -> List[Dict[str, Any]]:
             "activa": True,
         },
     ]
-
-
-def _agenda_default() -> Dict[str, Dict[str, Any]]:
-    return {
-        "2026-11-18 10:00": {"estado": "LIBRE", "cliente": None},
-        "2026-11-18 14:00": {"estado": "OCUPADO", "cliente": "Empresa Alfa SAS"},
-        "2026-11-18 16:00": {"estado": "LIBRE", "cliente": None},
-        "2026-11-19 09:00": {"estado": "LIBRE", "cliente": None},
-        "2026-11-19 11:00": {"estado": "LIBRE", "cliente": None},
-    }
 
 
 class RepositorioSQLite(RepositorioEntorno):
@@ -351,13 +321,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 porcentaje_descuento_optimo REAL NOT NULL,
                 cerrado_exitosamente INTEGER NOT NULL,
                 PRIMARY KEY (negocio_id, id_oferta)
-            );
-            CREATE TABLE IF NOT EXISTS agenda_bloques (
-                negocio_id TEXT NOT NULL,
-                fecha_hora TEXT NOT NULL,
-                estado TEXT NOT NULL,
-                cliente TEXT,
-                PRIMARY KEY (negocio_id, fecha_hora)
             );
             CREATE TABLE IF NOT EXISTS perfiles_clientes (
                 negocio_id TEXT NOT NULL,
@@ -477,11 +440,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 ),
             )
 
-        for fh, info in _agenda_default().items():
-            cur.execute(
-                "INSERT INTO agenda_bloques (negocio_id, fecha_hora, estado, cliente) VALUES (?, ?, ?, ?)",
-                (self.negocio_id, fh, info["estado"], info["cliente"]),
-            )
         self._conn.commit()
 
     def obtener_configuracion_negocio(self) -> Dict[str, Any]:
@@ -515,28 +473,6 @@ class RepositorioSQLite(RepositorioEntorno):
             (self.negocio_id,),
         ).fetchall()
         return pd.DataFrame([dict(r) for r in rows])
-
-    def obtener_bloques_agenda(self) -> Dict[str, Dict[str, Any]]:
-        rows = self._conn.execute(
-            "SELECT fecha_hora, estado, cliente FROM agenda_bloques WHERE negocio_id = ? ORDER BY fecha_hora",
-            (self.negocio_id,),
-        ).fetchall()
-        return _mapear_bloques(rows)
-
-    def guardar_bloque_agenda(
-        self, fecha_hora: str, estado: str, cliente: Optional[str] = None
-    ) -> None:
-        self._conn.execute(
-            """
-            INSERT INTO agenda_bloques (negocio_id, fecha_hora, estado, cliente)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(negocio_id, fecha_hora) DO UPDATE SET
-                estado = excluded.estado,
-                cliente = excluded.cliente
-            """,
-            (self.negocio_id, fecha_hora, estado, cliente),
-        )
-        self._conn.commit()
 
     def listar_perfiles_clientes(self) -> Dict[str, Dict[str, Any]]:
         rows = self._conn.execute(
@@ -687,23 +623,6 @@ class RepositorioSupabase(RepositorioEntorno):
 
     def obtener_historico_ofertas(self) -> pd.DataFrame:
         return pd.DataFrame(self._get("historico_ofertas"))
-
-    def obtener_bloques_agenda(self) -> Dict[str, Dict[str, Any]]:
-        return _mapear_bloques(self._get("agenda_bloques", {"order": "fecha_hora.asc"}))
-
-    def guardar_bloque_agenda(
-        self, fecha_hora: str, estado: str, cliente: Optional[str] = None
-    ) -> None:
-        self._upsert(
-            "agenda_bloques",
-            {
-                "negocio_id": self.negocio_id,
-                "fecha_hora": fecha_hora,
-                "estado": estado,
-                "cliente": cliente,
-            },
-            on_conflict="negocio_id,fecha_hora",
-        )
 
     def listar_perfiles_clientes(self) -> Dict[str, Dict[str, Any]]:
         return _mapear_perfiles(self._get("perfiles_clientes"))

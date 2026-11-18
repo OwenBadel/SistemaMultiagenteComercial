@@ -557,9 +557,6 @@ def test_negocio_distinto_dinamico_desde_bd() -> None:
             """,
             ("estudio_fotografia", f"OFE-FOT-{i:03d}", 600_000 + i * 50_000, 0.70, 3, 1, 8.0, 1),
         )
-    cur.execute(
-        "INSERT INTO agenda_bloques VALUES ('estudio_fotografia', '2026-11-20 09:00', 'LIBRE', NULL)"
-    )
     conn.commit()
 
     async def _run() -> None:
@@ -652,7 +649,6 @@ def test_repositorio_supabase_rest_api() -> None:
     assert "auditoria" in cat
     assert cat["auditoria"]["tarifa_unitaria"] == 120.0
 
-    repo.guardar_bloque_agenda("2026-11-22 10:00", "OCUPADO", "Cliente Nube")
     repo.registrar_alerta_humana(
         {
             "timestamp": "2026-11-18T12:00:00",
