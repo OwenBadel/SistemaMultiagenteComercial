@@ -145,6 +145,7 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
             "canal_integracion": "Botpress API Bridge",
             "api_key_activa": bool(servicio_sma.config_botpress.botpress_api_key),
             "modo_bd": servicio_sma.repositorio.modo_bd,
+            "modo_agenda": servicio_sma.entorno.agendaVirtual.modo,
             "negocio": {
                 "id": servicio_sma.repositorio.negocio_id,
                 "nombre": cfg_neg.get("nombre_negocio", "Independiente"),
@@ -173,7 +174,7 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
                 servicio_sma.entorno.perfilesClientes.perfiles.values()
             ),
             "alertas_humanas": servicio_sma.entorno.alertas_humanas,
-            "agenda_virtual": servicio_sma.entorno.agendaVirtual.bloques,
+            "agenda_virtual": servicio_sma.entorno.agendaVirtual.obtener_bloques_vista(),
         }
 
     @app.post("/api/humano/reactivar")

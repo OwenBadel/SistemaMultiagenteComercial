@@ -1,6 +1,6 @@
 """
-Configuracion del puente API entre Botpress, la base de datos en la nube
-(Supabase PostgreSQL) y SistemaMultiagenteComercial.
+Configuracion del puente API entre Botpress, Supabase PostgreSQL,
+Google Calendar API v3 y SistemaMultiagenteComercial.
 
 Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 @dataclass
 class ConfiguracionBotpress:
-    """Parametros del servidor HTTP conectado con Botpress Studio y Supabase."""
+    """Parametros del servidor HTTP conectado con Botpress, Supabase y Google Calendar."""
 
     botpress_api_key: str = ""
     owner_whatsapp_number: str = ""
@@ -23,6 +23,9 @@ class ConfiguracionBotpress:
     supabase_key: str = ""
     negocio_id: str = "tech_freelance"
     sqlite_db_path: str = "data/entorno_local.db"
+    google_calendar_id: str = ""
+    google_service_account_json: str = ""
+    google_timezone: str = "America/Bogota"
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -41,6 +44,9 @@ class ConfiguracionBotpress:
             supabase_key=os.getenv("SUPABASE_KEY", ""),
             negocio_id=os.getenv("NEGOCIO_ID", "tech_freelance"),
             sqlite_db_path=os.getenv("SQLITE_DB_PATH", "data/entorno_local.db"),
+            google_calendar_id=os.getenv("GOOGLE_CALENDAR_ID", ""),
+            google_service_account_json=os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", ""),
+            google_timezone=os.getenv("GOOGLE_TIMEZONE", "America/Bogota"),
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8000")),
         )
@@ -49,3 +55,10 @@ class ConfiguracionBotpress:
     def usa_supabase(self) -> bool:
         """Indica si hay credenciales listas para conectar con Supabase Cloud."""
         return bool(self.supabase_url.strip() and self.supabase_key.strip())
+
+    @property
+    def usa_google_calendar(self) -> bool:
+        """Indica si hay credenciales listas para Google Calendar API v3."""
+        return bool(
+            self.google_calendar_id.strip() and self.google_service_account_json.strip()
+        )

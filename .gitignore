@@ -18,5 +18,6 @@ Thumbs.db
 *.log
 *.db
 *.sqlite*
+*service_account*.json
 .env
 

@@ -83,6 +83,7 @@ def _imprimir_estado_servidor(
         "XMPP Embebido (PyJabber localhost:5222)" if usar_xmpp else "Bus local asyncio",
     )
     tabla.add_row("Base de Datos", servicio.repositorio.modo_bd)
+    tabla.add_row("Agenda", servicio.entorno.agendaVirtual.modo)
     tabla.add_row(
         "Negocio Activo (BD)",
         f"{cfg_neg.get('nombre_negocio')} [{servicio.repositorio.negocio_id}]",

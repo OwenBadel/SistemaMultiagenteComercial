@@ -29,6 +29,7 @@ from src.integracion_botpress.servidor_botpress import crear_app_botpress
 from src.ml.datasets import generar_historico_ofertas, generar_tarifas_historicas
 from src.ml.modelos_ml import ModeloCotizacionesRF, ModeloNLPVentas, ModeloPromocionesKNN
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.persistencia.google_calendar import ClienteGoogleCalendar
 from src.persistencia.repositorio import RepositorioSQLite, RepositorioSupabase
 
 
@@ -665,4 +666,125 @@ def test_repositorio_supabase_rest_api() -> None:
         }
     )
     repo.resolver_alertas_cliente("u1")
+
+
+def test_calendario_google_api_v3() -> None:
+    """
+    Valida AgenteAgendamientos (FIPA-Query) conectado al cliente Google Calendar API v3:
+    1) Bloque ocupado en freeBusy -> propone alternativas libres reales del dia.
+    2) Bloque libre -> crea el evento real mediante POST /calendars/{id}/events.
+    """
+    eventos_creados: List[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/freeBusy"):
+            body = request.read().decode("utf-8")
+            # Primer consulta puntual sobre 14:00 -> ocupado; consulta jornada completa -> 09:00 libre
+            if "2026-11-20T14:00:00" in body and "2026-11-20T15:00:00" in body:
+                return httpx.Response(
+                    200,
+                    json={
+                        "calendars": {
+                            "owner@gmail.com": {
+                                "busy": [
+                                    {
+                                        "start": "2026-11-20T14:00:00-05:00",
+                                        "end": "2026-11-20T15:00:00-05:00",
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                )
+            if "2026-11-20T08:00:00" in body:
+                return httpx.Response(
+                    200,
+                    json={
+                        "calendars": {
+                            "owner@gmail.com": {
+                                "busy": [
+                                    {
+                                        "start": "2026-11-20T14:00:00-05:00",
+                                        "end": "2026-11-20T15:00:00-05:00",
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                )
+            return httpx.Response(
+                200, json={"calendars": {"owner@gmail.com": {"busy": []}}}
+            )
+
+        if request.method == "POST" and path.endswith("/events"):
+            import json as _json
+
+            payload = _json.loads(request.read().decode("utf-8"))
+            eventos_creados.append(payload)
+            return httpx.Response(
+                200,
+                json={"id": "evt_gcal_001", "htmlLink": "https://calendar.google.com/evt_gcal_001"},
+            )
+
+        if request.method == "GET" and path.endswith("/events"):
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "summary": "Cita Comercial - Laura",
+                            "start": {"dateTime": "2026-11-20T09:00:00-05:00"},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    gcal = ClienteGoogleCalendar(
+        calendar_id="owner@gmail.com",
+        timezone="America/Bogota",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        token_estatico="token_gcal_demo",
+    )
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            google_calendar=gcal,
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            assert servicio.entorno.agendaVirtual.modo == "Google Calendar API v3"
+            await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_gcal",
+                nombre_cliente="Laura",
+                texto="Cotizar desarrollo web de 30 horas complejidad 2",
+            )
+            res_ocup = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_gcal",
+                nombre_cliente="Laura",
+                texto="Quiero agendar cita el 2026-11-20 14:00",
+            )
+            assert res_ocup["accion"] == "horarios_alternativos"
+            assert "2026-11-20 08:00" in res_ocup["resultado"]["alternativas"]
+
+            res_ok = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_gcal",
+                nombre_cliente="Laura",
+                texto="Entonces agenda el 2026-11-20 09:00",
+            )
+            assert res_ok["accion"] == "cita_confirmada"
+            assert len(eventos_creados) == 1
+            assert "Laura" in eventos_creados[0]["summary"]
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
 

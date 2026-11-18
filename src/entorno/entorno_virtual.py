@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 
 from src.ml.datasets import CATALOGO_SERVICIOS
+from src.persistencia.google_calendar import ClienteGoogleCalendar
 from src.persistencia.repositorio import (
     RepositorioEntorno,
     RepositorioSQLite,
@@ -138,22 +139,37 @@ class BaseDatos:
 
 @dataclass
 class Calendario:
-    """Representa el atributo `agendaVirtual : Calendario` sincronizado con BD."""
+    """
+    Representa el atributo `agendaVirtual : Calendario`.
+    Opera directamente contra Google Calendar API v3 cuando esta configurado,
+    o contra almacenamiento local para pruebas offline.
+    """
 
     bloques: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     _on_save: Optional[Callable[[str, str, Optional[str]], None]] = field(
         default=None, repr=False
     )
+    google_calendar: Optional[ClienteGoogleCalendar] = field(default=None, repr=False)
+
+    @property
+    def modo(self) -> str:
+        return "Google Calendar API v3" if self.google_calendar is not None else "Local (Respaldo)"
 
     def verificar_disponibilidad(self, fecha_hora: str) -> bool:
-        """Retorna True si el bloque esta libre o aun no figura ocupado."""
+        """Retorna True si el bloque esta libre en Google Calendar o agenda local."""
+        if self.google_calendar is not None:
+            return self.google_calendar.verificar_disponibilidad(fecha_hora)
         bloque = self.bloques.get(fecha_hora)
         if bloque is None:
             return True
         return bloque["estado"] == "LIBRE"
 
     def obtener_alternativas(self, excluir_fecha: str, limite: int = 2) -> List[str]:
-        """Retorna bloques horarios libres distintos a la fecha ocupada."""
+        """Retorna bloques horarios libres reales distintos a la fecha ocupada."""
+        if self.google_calendar is not None:
+            return self.google_calendar.obtener_alternativas(
+                excluir_fecha=excluir_fecha, limite=limite
+            )
         alternativas = [
             fh
             for fh, info in self.bloques.items()
@@ -164,12 +180,26 @@ class Calendario:
     def cambiar_estado_bloque(
         self, fecha_hora: str, estado: str, cliente: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Actualiza la disponibilidad del bloque en memoria y en BD."""
+        """Registra la cita en Google Calendar (si esta activo) y actualiza vista."""
         estado_norm = estado.upper()
+        extra: Dict[str, Any] = {}
+        if self.google_calendar is not None and estado_norm == "OCUPADO":
+            extra = self.google_calendar.crear_evento(
+                fecha_hora=fecha_hora, cliente=cliente or "Cliente Comercial"
+            )
         self.bloques[fecha_hora] = {"estado": estado_norm, "cliente": cliente}
         if self._on_save is not None:
             self._on_save(fecha_hora, estado_norm, cliente)
-        return {"fecha_hora": fecha_hora, "estado": estado_norm, "cliente": cliente}
+        return {"fecha_hora": fecha_hora, "estado": estado_norm, "cliente": cliente, **extra}
+
+    def obtener_bloques_vista(self) -> Dict[str, Dict[str, Any]]:
+        """Retorna proximos eventos reales de Google Calendar o bloques locales."""
+        if self.google_calendar is not None:
+            try:
+                return self.google_calendar.listar_proximos_eventos()
+            except Exception:
+                return self.bloques
+        return self.bloques
 
 
 class EntornoVirtualAtencion:
@@ -177,7 +207,8 @@ class EntornoVirtualAtencion:
     <<environment>> EntornoVirtualAtencion:
     Espacio compartido donde habitan la organizacion y los 5 agentes SPADE.
     Toda la configuracion comercial, catalogo, historico ML, agenda y estado
-    Human-in-the-Loop se carga y persiste mediante `RepositorioEntorno`.
+    Human-in-the-Loop se carga y persiste mediante `RepositorioEntorno` y
+    `ClienteGoogleCalendar`.
     """
 
     def __init__(
@@ -186,6 +217,7 @@ class EntornoVirtualAtencion:
         historico_ofertas: Optional[pd.DataFrame] = None,
         logger_evento: Optional[Callable[[str, str], None]] = None,
         repositorio: Optional[RepositorioEntorno] = None,
+        google_calendar: Optional[ClienteGoogleCalendar] = None,
     ) -> None:
         self.repositorio: RepositorioEntorno = repositorio or RepositorioSQLite(":memory:")
         self.config_negocio: Dict[str, Any] = self.repositorio.obtener_configuracion_negocio()
@@ -218,8 +250,9 @@ class EntornoVirtualAtencion:
             promociones_vigentes=self.repositorio.obtener_promociones_vigentes(),
         )
         self.agendaVirtual: Calendario = Calendario(
-            bloques=self.repositorio.obtener_bloques_agenda(),
-            _on_save=self.repositorio.guardar_bloque_agenda,
+            bloques={} if google_calendar is not None else self.repositorio.obtener_bloques_agenda(),
+            _on_save=None if google_calendar is not None else self.repositorio.guardar_bloque_agenda,
+            google_calendar=google_calendar,
         )
 
         self.habitantes: List[str] = []

@@ -463,6 +463,7 @@
       </div>
       <div class="estado-barra">
         <span id="badge-bd" class="etiqueta etiqueta-info">BD: conectando...</span>
+        <span id="badge-agenda" class="etiqueta etiqueta-info">Agenda: verificando...</span>
         <span id="badge-negocio" class="etiqueta etiqueta-info">Negocio: cargando...</span>
         <span id="badge-api" class="etiqueta etiqueta-info">API Botpress: verificando...</span>
         <span id="badge-ml" class="etiqueta etiqueta-ok">Modelos ML: cargando...</span>
@@ -709,6 +710,7 @@
 
         const neg = data.negocio || {};
         document.getElementById('badge-bd').textContent = `BD: ${data.modo_bd || 'Local'}`;
+        document.getElementById('badge-agenda').textContent = `Agenda: ${data.modo_agenda || 'Local'}`;
         document.getElementById('badge-negocio').textContent =
           `Negocio: ${neg.nombre || '--'} (${neg.id || '--'})`;
 

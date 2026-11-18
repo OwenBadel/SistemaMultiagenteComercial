@@ -33,11 +33,13 @@ Botpress actua unicamente como pasarela de canales (WhatsApp, Webchat, Messenger
 | `AgenteVentas` | `EjecutivoVentas` | Con aprendizaje + Utilidad | NLP (`TfidfVectorizer` + `LogisticRegression`) + catalogo de BD | Subordinado a `Coordinador` |
 | `AgenteCotizaciones` | `LiquidadorCotizaciones` | Con aprendizaje + Metas | `RandomForestRegressor` (Scikit-Learn) | Subordinado a `Coordinador` |
 | `AgentePromociones` | `AnalistaPromociones` | Con aprendizaje + Utilidad | `KNeighborsRegressor` (KNN Scikit-Learn) | Subordinado a `Coordinador` |
-| `AgenteAgendamientos` | `GestorAgenda` | Basado en metas | Consulta y reserva sobre `agendaVirtual` en BD | Subordinado a `Coordinador` |
+| `AgenteAgendamientos` | `GestorAgenda` | Basado en metas | Consulta y reserva real en Google Calendar API v3 | Subordinado a `Coordinador` |
 
 ---
 
-## 3. Configuracion de la Base de Datos en la Nube (Supabase)
+## 3. Configuracion de Base de Datos (Supabase) y Google Calendar
+
+### Base de datos en la nube (Supabase)
 
 1. Crea un proyecto gratuito en `https://supabase.com/`.
 2. Abre **SQL Editor -> New query** en tu proyecto de Supabase, pega el contenido completo de [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) y presiona **Run**.
@@ -52,6 +54,16 @@ Botpress actua unicamente como pasarela de canales (WhatsApp, Webchat, Messenger
    NEGOCIO_ID=tech_freelance
    ```
    *(Si cambias `NEGOCIO_ID=estudio_fotografia` o creas una fila nueva en `negocios` y `servicios`, todo el sistema multiagente cambia de rubro automaticamente sin editar codigo).*
+
+### Agenda real (Google Calendar API v3)
+1. En **Google Cloud Console** habilita **Google Calendar API**, crea una **Service Account** y descarga el archivo JSON de credenciales (ej. `google_service_account.json` en la raiz del proyecto; excluido en `.gitignore`).
+2. Abre **Google Calendar** con la cuenta del dueno y comparte el calendario con el correo `client_email` de esa Service Account dandole permiso **"Hacer cambios en eventos"**.
+3. Agrega en `.env`:
+   ```env
+   GOOGLE_CALENDAR_ID=correo_del_calendario@gmail.com
+   GOOGLE_SERVICE_ACCOUNT_JSON=google_service_account.json
+   GOOGLE_TIMEZONE=America/Bogota
+   ```
 
 ---
 

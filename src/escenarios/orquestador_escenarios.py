@@ -30,20 +30,21 @@ from src.ml.modelos_ml import (
     ModeloPromocionesKNN,
 )
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.persistencia.google_calendar import ClienteGoogleCalendar
 from src.persistencia.repositorio import RepositorioEntorno, crear_repositorio
 
 
 class ServicioMultiagenteComercial:
     """
     Orquestador de ejecucion real para el SistemaMultiagenteComercial
-    conectado con Botpress Studio y persistencia dinamica en la nube (Supabase)
-    o respaldo local SQLite.
+    conectado con Botpress Studio, Supabase PostgreSQL y Google Calendar API v3.
     """
 
     def __init__(
         self,
         config_botpress: Optional[ConfiguracionBotpress] = None,
         repositorio: Optional[RepositorioEntorno] = None,
+        google_calendar: Optional[ClienteGoogleCalendar] = None,
         usar_xmpp_embebido: bool = True,
         consola: Optional[Console] = None,
         silencioso: bool = False,
@@ -72,11 +73,27 @@ class ServicioMultiagenteComercial:
                 sqlite_path=ruta_sqlite,
             )
 
-        # 2. Monitor FIPA-ACL y Entorno MAS-ML alimentado desde BD
+        # 2. Conexion a Google Calendar API v3 (si esta configurado)
+        if google_calendar is not None:
+            self.google_calendar: Optional[ClienteGoogleCalendar] = google_calendar
+        elif self.config_botpress.usa_google_calendar:
+            cred_valor = self.config_botpress.google_service_account_json.strip()
+            if not cred_valor.startswith("{") and not Path(cred_valor).is_absolute():
+                cred_valor = str(raiz / cred_valor)
+            self.google_calendar = ClienteGoogleCalendar(
+                calendar_id=self.config_botpress.google_calendar_id,
+                service_account_json=cred_valor,
+                timezone=self.config_botpress.google_timezone,
+            )
+        else:
+            self.google_calendar = None
+
+        # 3. Monitor FIPA-ACL y Entorno MAS-ML alimentado desde BD + Google Calendar
         self.monitor = MonitorFIPAACL(consola=self.consola, silencioso=self.silencioso)
         self.entorno = EntornoVirtualAtencion(
             logger_evento=self.monitor.registrar_evento_entorno,
             repositorio=self.repositorio,
+            google_calendar=self.google_calendar,
         )
         self.df_tarifas = self.entorno.tarifasYMargenes.tarifas_historicas
         self.df_ofertas = self.entorno.tarifasYMargenes.historico_ofertas
@@ -189,7 +206,7 @@ class ServicioMultiagenteComercial:
             "AgenteAgendamientos",
             "GestorAgenda",
             "Basado en metas (Calendario)",
-            f"{len(self.entorno.agendaVirtual.bloques)} bloques cargados",
+            self.entorno.agendaVirtual.modo,
         )
         self.consola.print(tabla)
 
