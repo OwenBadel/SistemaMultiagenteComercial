@@ -140,6 +140,7 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
     async def _run() -> None:
         servicio = ServicioMultiagenteComercial(
             ruta_data=RAIZ / "data",
+            config_botpress=ConfiguracionBotpress(),
             usar_xmpp_embebido=False,
             silencioso=True,
         )
@@ -190,6 +191,7 @@ def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
     async def _run() -> None:
         servicio = ServicioMultiagenteComercial(
             ruta_data=RAIZ / "data",
+            config_botpress=ConfiguracionBotpress(),
             usar_xmpp_embebido=False,
             silencioso=True,
         )
@@ -249,6 +251,7 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
     async def _run() -> None:
         servicio = ServicioMultiagenteComercial(
             ruta_data=RAIZ / "data",
+            config_botpress=ConfiguracionBotpress(),
             usar_xmpp_embebido=False,
             silencioso=True,
         )
