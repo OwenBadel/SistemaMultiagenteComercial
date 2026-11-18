@@ -203,15 +203,17 @@ class ServicioMultiagenteComercial:
             return dict(self.ventas.ultimo_resultado)
 
     @staticmethod
-    def _extraer_texto_respuesta(resultado: Dict[str, Any], pausado_humano: bool) -> str:
+    def _extraer_texto_respuesta(resultado: Dict[str, Any], accion: str) -> str:
         """Extrae el texto final emitido por AgenteVentas para devolverlo a Botpress."""
+        if accion == "en_atencion_humana":
+            return ""
         envio = resultado.get("envio") or resultado.get("respuesta")
         if isinstance(envio, dict) and envio.get("contenido"):
             return str(envio["contenido"])
-        if pausado_humano:
+        if accion == "automatizacion_pausada":
             return (
-                "Tu caso fue escalado a un asesor humano. En breve continuara la "
-                "atencion por este mismo canal."
+                "Tu caso fue escalado directamente con nuestro asesor encargado. "
+                "En un momento te respondera por este mismo chat."
             )
         return "Solicitud procesada por el sistema multiagente."
 
@@ -233,7 +235,13 @@ class ServicioMultiagenteComercial:
             texto, contexto_tipo=tipo_evento_sugerido
         )
         tipo_evento = tipo_evento_sugerido or analisis_previo["intencion"]
-        esperar_coordinador = analisis_previo["tono_cliente"] == "hostil"
+        perfil_previo = self.entorno.perfilesClientes.obtener_o_crear_perfil(
+            id_cliente, nombre=nombre_cliente, canal=canal
+        )
+        estaba_pausado = not bool(perfil_previo.get("automatizacion_activa", True))
+        esperar_coordinador = (
+            not estaba_pausado and analisis_previo["tono_cliente"] == "hostil"
+        )
 
         payload: Dict[str, Any] = {
             "id_cliente": id_cliente,
@@ -252,10 +260,34 @@ class ServicioMultiagenteComercial:
         mensajes_turno = self.monitor.historial_mensajes[idx_inicio:]
         perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
         pausado_humano = not bool(perfil.get("automatizacion_activa", True))
-        respuesta_texto = self._extraer_texto_respuesta(resultado, pausado_humano)
         accion = str(
             resultado.get("resultado") or resultado.get("accion") or "procesado"
         )
+        respuesta_texto = self._extraer_texto_respuesta(resultado, accion)
+
+        alerta_humana = (
+            dict(self.coordinador.ultimo_resultado)
+            if esperar_coordinador
+            else None
+        )
+        notificar_dueno = accion == "automatizacion_pausada"
+        responder_al_cliente = accion != "en_atencion_humana"
+
+        mensaje_notificacion_dueno = ""
+        if notificar_dueno:
+            motivo = str(
+                (alerta_humana or {}).get("motivo_critico", "reclamo_critico_cliente")
+            )
+            mensaje_notificacion_dueno = (
+                "ALERTA DE ATENCION HUMANA - SistemaMultiagenteComercial\n"
+                f"Cliente: {perfil.get('nombre', nombre_cliente)}\n"
+                f"ID / Telefono: {id_cliente}\n"
+                f"Canal: {canal}\n"
+                f"Motivo de pausa: {motivo}\n"
+                f"Ultimo mensaje: {texto}\n"
+                "La automatizacion quedo pausada unicamente para este chat. "
+                "Ingresa al WhatsApp corporativo para responder directamente."
+            )
 
         return {
             "status": "ok",
@@ -264,18 +296,18 @@ class ServicioMultiagenteComercial:
             "nombre_cliente": nombre_cliente,
             "texto_recibido": texto,
             "respuesta": respuesta_texto,
+            "responder_al_cliente": responder_al_cliente,
             "pausado_humano": pausado_humano,
+            "notificar_dueno": notificar_dueno,
+            "telefono_dueno": self.config_botpress.owner_whatsapp_number,
+            "mensaje_notificacion_dueno": mensaje_notificacion_dueno,
             "accion": accion,
             "intencion": analisis_previo["intencion"],
             "tono_cliente": analisis_previo["tono_cliente"],
             "nlp": analisis_previo,
             "resultado": resultado,
             "mensajes_fipa_turno": mensajes_turno,
-            "alerta_humana": (
-                dict(self.coordinador.ultimo_resultado)
-                if esperar_coordinador
-                else None
-            ),
+            "alerta_humana": alerta_humana,
         }
 
     async def responder_como_humano(

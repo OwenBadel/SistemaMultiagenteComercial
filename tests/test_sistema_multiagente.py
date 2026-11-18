@@ -298,20 +298,39 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
                 texto="Esto es una estafa, quiero reclamar con un humano ya",
             )
             assert res_hostil["pausado_humano"] is True
+            assert res_hostil["notificar_dueno"] is True
+            assert res_hostil["responder_al_cliente"] is True
+            assert "573009998877" in res_hostil["mensaje_notificacion_dueno"]
+            assert "Pedro Diaz" in res_hostil["mensaje_notificacion_dueno"]
             assert res_hostil["alerta_humana"] is not None
             assert res_hostil["alerta_humana"]["estado"] == "alerta_recibida_por_profesional"
             perfil_pausado = servicio.entorno.perfilesClientes.perfiles["573009998877"]
             assert perfil_pausado["automatizacion_activa"] is False
             assert len(servicio.entorno.alertas_humanas) >= 1
 
+            # Segundo mensaje en el mismo chat pausado: bot en silencio, sin re-alertar al dueno
             res_mientras_pausa = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
                 id_cliente="573009998877",
                 nombre_cliente="Pedro Diaz",
-                texto="Sigo esperando respuesta",
+                texto="Sigo esperando respuesta, esto es un robo",
             )
             assert res_mientras_pausa["resultado"]["resultado"] == "en_atencion_humana"
             assert res_mientras_pausa["pausado_humano"] is True
+            assert res_mientras_pausa["responder_al_cliente"] is False
+            assert res_mientras_pausa["notificar_dueno"] is False
+            assert res_mientras_pausa["respuesta"] == ""
+
+            # Otro cliente distinto sigue siendo atendido normalmente (pausa aislada por chat)
+            res_otro_cliente = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="573008887766",
+                nombre_cliente="Maria Lopez",
+                texto="Hola, quiero cotizar desarrollo web de 35 horas complejidad 2",
+            )
+            assert res_otro_cliente["pausado_humano"] is False
+            assert res_otro_cliente["responder_al_cliente"] is True
+            assert res_otro_cliente["accion"] == "cotizacion_entregada"
 
             envio_manual = await servicio.responder_como_humano(
                 id_cliente="573009998877",
@@ -337,7 +356,10 @@ def test_endpoints_botpress_y_panel_humano() -> None:
     """
 
     async def _run() -> None:
-        config = ConfiguracionBotpress(botpress_api_key="clave_botpress_2026")
+        config = ConfiguracionBotpress(
+            botpress_api_key="clave_botpress_2026",
+            owner_whatsapp_number="573005551122",
+        )
         servicio = ServicioMultiagenteComercial(
             ruta_data=RAIZ / "data",
             config_botpress=config,
@@ -412,6 +434,9 @@ def test_endpoints_botpress_y_panel_humano() -> None:
                 assert r_fb.status_code == 200
                 data_fb = r_fb.json()
                 assert data_fb["pausado_humano"] is True
+                assert data_fb["notificar_dueno"] is True
+                assert data_fb["telefono_dueno"] == "573005551122"
+                assert "fb_7001" in data_fb["mensaje_notificacion_dueno"]
                 assert data_fb["alerta_humana"] is not None
 
                 r_react = await client.post(

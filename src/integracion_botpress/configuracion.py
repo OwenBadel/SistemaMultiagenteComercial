@@ -17,6 +17,7 @@ class ConfiguracionBotpress:
     """Parametros del servidor HTTP conectado con Botpress Studio."""
 
     botpress_api_key: str = ""
+    owner_whatsapp_number: str = ""
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -30,6 +31,7 @@ class ConfiguracionBotpress:
 
         return cls(
             botpress_api_key=os.getenv("BOTPRESS_API_KEY", ""),
+            owner_whatsapp_number=os.getenv("OWNER_WHATSAPP_NUMBER", ""),
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8000")),
         )
