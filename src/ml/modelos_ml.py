@@ -99,6 +99,13 @@ class ModeloNLPVentas:
             "pensar", "alto", "excede", "objecion", "objeción",
             "muy caro", "no me alcanza",
         )
+        palabras_consulta = (
+            "vendes", "venden", "vende", "ofreces", "ofrecen", "ofrece",
+            "que tienes", "que tienen", "que hay", "que hacen",
+            "a que te dedicas", "a que se dedican", "catalogo", "catálogo",
+            "portafolio", "servicios", "informacion", "información",
+            "que productos", "que manejas", "que manejan",
+        )
 
         parametros = self._extraer_parametros_texto(texto_norm)
 
@@ -142,10 +149,12 @@ class ModeloNLPVentas:
             intencion = "solicitud_cotizacion"
             tono = "interesado"
             nivel_indecision = 0.20
-        elif contexto_tipo == "consulta_servicio":
+        elif contexto_tipo == "consulta_servicio" or any(
+            p in texto_norm for p in palabras_consulta
+        ):
             intencion = "consulta_servicio"
             tono = "interesado"
-            nivel_indecision = 0.25
+            nivel_indecision = 0.20
         else:
             intencion = intencion_ml
             tono = tono_ml

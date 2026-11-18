@@ -130,6 +130,10 @@ def test_modelos_sklearn_y_datasets() -> None:
     nlp_hostil = modelo_nlp.analizar_mensaje("Esto es una estafa, quiero un humano ya")
     assert nlp_hostil["tono_cliente"] == "hostil"
 
+    nlp_coloquial = modelo_nlp.analizar_mensaje("oye compadre que vendes")
+    assert nlp_coloquial["intencion"] == "consulta_servicio"
+    assert nlp_coloquial["tono_cliente"] == "interesado"
+
 
 def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
     """
