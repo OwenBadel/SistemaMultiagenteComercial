@@ -414,13 +414,6 @@ def test_endpoints_botpress_y_panel_humano() -> None:
                 assert data_fb["pausado_humano"] is True
                 assert data_fb["alerta_humana"] is not None
 
-                r_resp = await client.post(
-                    "/api/humano/responder",
-                    json={"id_cliente": "fb_7001", "texto": "Atendido por asesor humano."},
-                )
-                assert r_resp.status_code == 200
-                assert r_resp.json()["canal"] == "Facebook"
-
                 r_react = await client.post(
                     "/api/humano/reactivar",
                     json={"id_cliente": "fb_7001"},

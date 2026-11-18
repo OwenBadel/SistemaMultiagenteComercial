@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SistemaMultiagenteComercial | Monitor FIPA-ACL y Entorno</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    :root {
+      --bg-base: #f8fafc;
+      --surface: #ffffff;
+      --surface-subtle: #f1f5f9;
+      --border: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --text-main: #0f172a;
+      --text-secondary: #334155;
+      --text-muted: #64748b;
+      --accent: #1d4ed8;
+      --accent-soft: #eff6ff;
+      --ok-text: #166534;
+      --ok-bg: #dcfce7;
+      --warn-text: #92400e;
+      --warn-bg: #fef3c7;
+      --err-text: #991b1b;
+      --err-bg: #fee2e2;
+      --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .contenedor {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: clamp(16px, 2.5vw, 28px);
+    }
+
+    header.barra-superior {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border-strong);
+      margin-bottom: 20px;
+    }
+
+    .identidad h1 {
+      font-size: clamp(1.2rem, 1.8vw, 1.55rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+    }
+
+    .identidad p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .estado-barra {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .etiqueta {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      border: 1px solid transparent;
+    }
+
+    .etiqueta-ok {
+      background: var(--ok-bg);
+      color: var(--ok-text);
+      border-color: #bbf7d0;
+    }
+
+    .etiqueta-info {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: #bfdbfe;
+    }
+
+    .etiqueta-warn {
+      background: var(--warn-bg);
+      color: var(--warn-text);
+      border-color: #fde68a;
+    }
+
+    .etiqueta-err {
+      background: var(--err-bg);
+      color: var(--err-text);
+      border-color: #fecaca;
+    }
+
+    button,
+    select {
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      font-weight: 600;
+      min-height: 44px;
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--text-main);
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--surface-subtle);
+    }
+
+    button.btn-primario {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+
+    button.btn-primario:hover {
+      background: #1e40af;
+    }
+
+    button.btn-compacto {
+      min-height: 44px;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+    }
+
+    .grid-agentes {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .tarjeta-agente {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+    }
+
+    .agente-cabecera {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .agente-nombre {
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .agente-rol {
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+
+    .agente-arq {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    @media (max-width: 980px) {
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .columna-lateral {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .panel-cabecera {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-subtle);
+    }
+
+    .panel-cabecera h2 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .panel-cuerpo {
+      padding: 14px 16px;
+    }
+
+    .controles-filtro {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .lista-fipa {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 680px;
+      overflow-y: auto;
+    }
+
+    .traza-fipa {
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 6px;
+      padding: 12px;
+      background: var(--surface);
+    }
+
+    .traza-fipa[data-perf="FAILURE"],
+    .traza-fipa[data-perf="REFUSE"],
+    .traza-fipa[data-perf="CANCEL"],
+    .traza-fipa[data-perf="REJECT-PROPOSAL"] {
+      border-left-color: #b91c1c;
+    }
+
+    .traza-fipa[data-perf="AGREE"],
+    .traza-fipa[data-perf="ACCEPT-PROPOSAL"],
+    .traza-fipa[data-perf="CONFIRM"] {
+      border-left-color: #15803d;
+    }
+
+    .traza-fipa[data-perf="PROPOSE"] {
+      border-left-color: #b45309;
+    }
+
+    .traza-meta {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .traza-ruta {
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .traza-hora {
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .traza-slide {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-secondary);
+    }
+
+    details.traza-json {
+      margin-top: 8px;
+    }
+
+    details.traza-json summary {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--accent);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    details.traza-json pre {
+      margin-top: 6px;
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .nota-hitl {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+
+    .alerta-item {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+
+    .alerta-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .alerta-info {
+      font-size: 0.84rem;
+    }
+
+    .alerta-detalle {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .tabla-agenda {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    .tabla-agenda th,
+    .tabla-agenda td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tabla-agenda th {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
+
+    .lista-eventos {
+      max-height: 220px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      color: var(--text-secondary);
+    }
+
+    .evento-fila {
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .evento-fila:last-child {
+      border-bottom: none;
+    }
+
+    .vacio {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      padding: 12px 0;
+    }
+
+    footer {
+      margin-top: 24px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        transition: none !important;
+        animation: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="contenedor">
+    <header class="barra-superior">
+      <div class="identidad">
+        <h1>SistemaMultiagenteComercial</h1>
+        <p>Monitor de Telemetria FIPA-ACL, MAS-ML y Pasarela Botpress</p>
+      </div>
+      <div class="estado-barra">
+        <span id="badge-api" class="etiqueta etiqueta-info">API Botpress: verificando...</span>
+        <span id="badge-ml" class="etiqueta etiqueta-ok">Modelos ML: cargando...</span>
+        <button id="btn-polling" type="button" onclick="alternarPolling()">Pausar refresco</button>
+      </div>
+    </header>
+
+    <main>
+      <section aria-label="Estado de Agentes SPADE" class="grid-agentes" id="grid-agentes"></section>
+
+      <div class="workspace">
+        <section class="panel" aria-label="Monitor FIPA-ACL en tiempo real">
+          <div class="panel-cabecera">
+            <h2>Monitor de Mensajeria FIPA-ACL</h2>
+            <div class="controles-filtro">
+              <label for="filtro-perf" class="sr-only">Filtrar por performativa</label>
+              <select id="filtro-perf" onchange="renderizarFipa()">
+                <option value="TODAS">Todas las performativas</option>
+                <option value="REQUEST">REQUEST</option>
+                <option value="AGREE">AGREE</option>
+                <option value="INFORM">INFORM</option>
+                <option value="FAILURE">FAILURE</option>
+                <option value="PROPOSE">PROPOSE</option>
+                <option value="ACCEPT-PROPOSAL">ACCEPT-PROPOSAL</option>
+                <option value="REJECT-PROPOSAL">REJECT-PROPOSAL</option>
+                <option value="REFUSE">REFUSE</option>
+                <option value="QUERY-IF">QUERY-IF</option>
+                <option value="CONFIRM">CONFIRM</option>
+                <option value="CANCEL">CANCEL</option>
+              </select>
+            </div>
+          </div>
+          <div class="panel-cuerpo">
+            <div id="lista-fipa" class="lista-fipa">
+              <p class="vacio">Esperando comunicacion FIPA-ACL entre agentes...</p>
+            </div>
+          </div>
+        </section>
+
+        <div class="columna-lateral">
+          <section class="panel" aria-label="Escalamiento Human-in-the-Loop">
+            <div class="panel-cabecera">
+              <h2>Supervision Human-in-the-Loop</h2>
+              <span id="contador-alertas" class="etiqueta etiqueta-ok">0 activas</span>
+            </div>
+            <div class="panel-cuerpo">
+              <p class="nota-hitl">
+                Cuando el Coordinador escala un caso critico, la automatizacion del cliente queda en pausa y el asesor responde directamente desde su WhatsApp o canal asignado. Cuando termine la atencion, reactiva el bot aqui.
+              </p>
+              <div id="lista-alertas">
+                <p class="vacio">No hay clientes en atencion humana actualmente.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" aria-label="Agenda Virtual">
+            <div class="panel-cabecera">
+              <h2>Agenda Virtual (Entorno)</h2>
+            </div>
+            <div class="panel-cuerpo">
+              <table class="tabla-agenda">
+                <thead>
+                  <tr>
+                    <th>Bloque</th>
+                    <th>Estado</th>
+                    <th>Cliente</th>
+                    <th>Accion</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-agenda-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel" aria-label="Trazas del Entorno">
+            <div class="panel-cabecera">
+              <h2>Eventos de EntornoVirtualAtencion</h2>
+            </div>
+            <div class="panel-cuerpo">
+              <div id="lista-eventos" class="lista-eventos">
+                <p class="vacio">Sin eventos registrados aun.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <span>Autores: Owen Badel, Maverick Diaz, Jesus Viloria | Fundacion Internacional Colombo (Unicolombo)</span>
+      <span id="ultima-sync">Ultima sincronizacion: --</span>
+    </footer>
+  </div>
+
+  <script>
+    let ultimoEstado = null;
+    let pollingActivo = true;
+    let timerPolling = null;
+
+    function escaparHtml(texto) {
+      const div = document.createElement('div');
+      div.textContent = String(texto ?? '');
+      return div.innerHTML;
+    }
+
+    function clasePerformativa(perf) {
+      if (['AGREE', 'ACCEPT-PROPOSAL', 'CONFIRM'].includes(perf)) return 'etiqueta-ok';
+      if (['FAILURE', 'REFUSE', 'CANCEL', 'REJECT-PROPOSAL'].includes(perf)) return 'etiqueta-err';
+      if (perf === 'PROPOSE') return 'etiqueta-warn';
+      return 'etiqueta-info';
+    }
+
+    function renderizarAgentes(data) {
+      const ml = data.modelos_ml || {};
+      const metricasPorAgente = {
+        AgenteCoordinador: 'Utilidad y control (4 subordinados)',
+        AgenteVentas: 'NLP TF-IDF + LogisticRegression',
+        AgenteCotizaciones: `RandomForest R2=${ml.random_forest_r2 ?? '--'} (${ml.registros_tarifas ?? 0} reg.)`,
+        AgentePromociones: `KNN R2=${ml.knn_r2_cv ?? '--'} (${ml.registros_ofertas ?? 0} reg.)`,
+        AgenteAgendamientos: `Metas (${Object.keys(data.agenda_virtual || {}).length} bloques)`
+      };
+
+      const html = (data.agentes || []).map(ag => `
+        <article class="tarjeta-agente">
+          <div class="agente-cabecera">
+            <span class="agente-nombre">${escaparHtml(ag.nombre)}</span>
+            <span class="etiqueta ${ag.vivo ? 'etiqueta-ok' : 'etiqueta-err'}">${ag.vivo ? 'ACTIVO' : 'DETENIDO'}</span>
+          </div>
+          <div class="agente-rol">rol: ${escaparHtml(ag.rol)}</div>
+          <div class="agente-arq">${escaparHtml(metricasPorAgente[ag.nombre] || ag.arquitectura)}</div>
+        </article>
+      `).join('');
+
+      document.getElementById('grid-agentes').innerHTML = html;
+    }
+
+    function renderizarFipa() {
+      if (!ultimoEstado) return;
+      const filtro = document.getElementById('filtro-perf').value;
+      const mensajes = (ultimoEstado.mensajes_fipa || []).slice().reverse().filter(m => {
+        if (filtro === 'TODAS') return true;
+        return (m.fipa_json && m.fipa_json[':performative']) === filtro;
+      });
+
+      const contenedor = document.getElementById('lista-fipa');
+      if (mensajes.length === 0) {
+        contenedor.innerHTML = '<p class="vacio">No hay mensajes FIPA-ACL para el filtro actual.</p>';
+        return;
+      }
+
+      contenedor.innerHTML = mensajes.map(m => {
+        const f = m.fipa_json || {};
+        const perf = f[':performative'] || 'MENSAJE';
+        const prot = f[':protocol'] || 'FIPA';
+        const ts = f[':timestamp'] || '';
+        return `
+          <article class="traza-fipa" data-perf="${escaparHtml(perf)}">
+            <div class="traza-meta">
+              <div>
+                <span class="etiqueta ${clasePerformativa(perf)}">${escaparHtml(perf)}</span>
+                <span class="etiqueta etiqueta-info">${escaparHtml(prot)}</span>
+              </div>
+              <span class="traza-hora">${escaparHtml(ts)}</span>
+            </div>
+            <pre class="traza-slide">${escaparHtml(m.etiqueta_diapositiva || '')}</pre>
+            <details class="traza-json">
+              <summary>Ver estructura JSON FIPA-ACL</summary>
+              <pre>${escaparHtml(JSON.stringify(f, null, 2))}</pre>
+            </details>
+          </article>
+        `;
+      }).join('');
+    }
+
+    function renderizarAlertas(data) {
+      const alertas = data.alertas_humanas || [];
+      const activas = alertas.filter(a => !a.resuelta);
+      const badge = document.getElementById('contador-alertas');
+      badge.textContent = `${activas.length} activa${activas.length === 1 ? '' : 's'}`;
+      badge.className = `etiqueta ${activas.length > 0 ? 'etiqueta-err' : 'etiqueta-ok'}`;
+
+      const box = document.getElementById('lista-alertas');
+      if (alertas.length === 0) {
+        box.innerHTML = '<p class="vacio">No hay clientes en atencion humana actualmente.</p>';
+        return;
+      }
+
+      box.innerHTML = alertas.slice().reverse().map(al => `
+        <div class="alerta-item">
+          <div class="alerta-info">
+            <span class="etiqueta ${al.resuelta ? 'etiqueta-ok' : 'etiqueta-err'}">${al.resuelta ? 'RESUELTA' : 'BOT PAUSADO'}</span>
+            <strong>${escaparHtml(al.id_cliente)}</strong> (${escaparHtml(al.canal)})
+            <div class="alerta-detalle">Motivo: ${escaparHtml(al.motivo_critico)} | ${escaparHtml(al.timestamp || '')}</div>
+          </div>
+          ${al.resuelta ? '' : `<button type="button" class="btn-primario btn-compacto" onclick="reactivarCliente('${escaparHtml(al.id_cliente)}')">Reactivar bot</button>`}
+        </div>
+      `).join('');
+    }
+
+    function renderizarAgenda(data) {
+      const bloques = Object.entries(data.agenda_virtual || {});
+      const tbody = document.getElementById('tabla-agenda-body');
+      tbody.innerHTML = bloques.map(([fh, info]) => {
+        const ocupado = info.estado === 'OCUPADO';
+        const proximoEstado = ocupado ? 'LIBRE' : 'OCUPADO';
+        return `
+          <tr>
+            <td>${escaparHtml(fh)}</td>
+            <td><span class="etiqueta ${ocupado ? 'etiqueta-warn' : 'etiqueta-ok'}">${escaparHtml(info.estado)}</span></td>
+            <td>${escaparHtml(info.cliente || '--')}</td>
+            <td>
+              <button type="button" class="btn-compacto" onclick="cambiarDisponibilidad('${escaparHtml(fh)}', '${proximoEstado}')">
+                ${ocupado ? 'Liberar' : 'Ocupar'}
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderizarEventos(data) {
+      const eventos = (data.eventos_entorno || []).slice(-18).reverse();
+      const box = document.getElementById('lista-eventos');
+      if (eventos.length === 0) {
+        box.innerHTML = '<p class="vacio">Sin eventos registrados aun.</p>';
+        return;
+      }
+      box.innerHTML = eventos.map(e =>
+        `<div class="evento-fila">[${escaparHtml(e.timestamp || '')}] <strong>${escaparHtml(e.origen)}</strong>: ${escaparHtml(e.detalle)}</div>`
+      ).join('');
+    }
+
+    async function cargarEstado() {
+      try {
+        const res = await fetch('/api/estado');
+        const data = await res.json();
+        ultimoEstado = data;
+
+        const apiBadge = document.getElementById('badge-api');
+        apiBadge.textContent = data.api_key_activa
+          ? 'POST /api/botpress/mensaje (API Key)'
+          : 'POST /api/botpress/mensaje (Activo)';
+        apiBadge.className = 'etiqueta etiqueta-ok';
+
+        const ml = data.modelos_ml || {};
+        document.getElementById('badge-ml').textContent =
+          `RF R2=${ml.random_forest_r2 ?? '--'} | KNN R2=${ml.knn_r2_cv ?? '--'}`;
+
+        renderizarAgentes(data);
+        renderizarFipa();
+        renderizarAlertas(data);
+        renderizarAgenda(data);
+        renderizarEventos(data);
+
+        const ahora = new Date();
+        document.getElementById('ultima-sync').textContent =
+          `Ultima sincronizacion: ${ahora.toLocaleTimeString()}`;
+      } catch (err) {
+        const apiBadge = document.getElementById('badge-api');
+        apiBadge.textContent = 'Sin conexion con servidor';
+        apiBadge.className = 'etiqueta etiqueta-err';
+      }
+    }
+
+    async function reactivarCliente(idCliente) {
+      await fetch('/api/humano/reactivar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_cliente: idCliente })
+      });
+      await cargarEstado();
+    }
+
+    async function cambiarDisponibilidad(fechaHora, nuevoEstado) {
+      await fetch('/api/calendario/disponibilidad', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fecha_hora: fechaHora,
+          estado: nuevoEstado,
+          cliente: nuevoEstado === 'OCUPADO' ? 'Reserva Manual' : null
+        })
+      });
+      await cargarEstado();
+    }
+
+    function alternarPolling() {
+      pollingActivo = !pollingActivo;
+      const btn = document.getElementById('btn-polling');
+      if (pollingActivo) {
+        btn.textContent = 'Pausar refresco';
+        cargarEstado();
+        timerPolling = setInterval(cargarEstado, 2000);
+      } else {
+        btn.textContent = 'Reanudar refresco';
+        clearInterval(timerPolling);
+      }
+    }
+
+    cargarEstado();
+    timerPolling = setInterval(cargarEstado, 2000);
+  </script>
+</body>
+</html>
