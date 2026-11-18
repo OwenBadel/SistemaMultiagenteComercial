@@ -671,3 +671,12 @@ def test_repositorio_supabase_rest_api() -> None:
     )
     repo.resolver_alertas_cliente("u1")
 
+    try:
+        RepositorioSupabase(
+            supabase_url="sb_publishable_demo_key",
+            supabase_key="sb_secret_demo",
+        )
+        assert False, "Debio rechazar una API key en SUPABASE_URL"
+    except ValueError as err:
+        assert "Project Settings -> Data API" in str(err)
+
