@@ -638,11 +638,12 @@ def test_repositorio_supabase_rest_api() -> None:
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     repo = RepositorioSupabase(
-        supabase_url="https://demo-proyecto.supabase.co",
+        supabase_url="https://demo-proyecto.supabase.co/rest/v1",
         supabase_key="service_role_demo",
         negocio_id="negocio_nube",
         http_client=client,
     )
+    assert repo.base_rest == "https://demo-proyecto.supabase.co/rest/v1"
     cfg = repo.obtener_configuracion_negocio()
     assert cfg["moneda"] == "USD"
     assert cfg["telefono_dueno"] == "573001119988"

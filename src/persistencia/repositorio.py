@@ -653,10 +653,13 @@ class RepositorioSupabase(RepositorioEntorno):
                     f"SUPABASE_URL invalida ('{url_limpia}'). Debe comenzar con https:// "
                     "(ej. https://tuproyecto.supabase.co)."
                 )
+        if url_limpia.endswith("/rest/v1"):
+            url_limpia = url_limpia[:-8]
+        key_limpia = supabase_key.strip().strip('"').strip("'")
         self.base_rest = url_limpia + "/rest/v1"
         self.headers = {
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
+            "apikey": key_limpia,
+            "Authorization": f"Bearer {key_limpia}",
             "Content-Type": "application/json",
         }
         self._client = http_client or httpx.Client(trust_env=False, timeout=12.0)
