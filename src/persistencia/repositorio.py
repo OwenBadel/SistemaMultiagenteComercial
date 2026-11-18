@@ -375,10 +375,10 @@ class RepositorioSQLite(RepositorioEntorno):
         )
 
         palabras_base = {
-            "desarrollo_web": ["web", "pagina", "pÃ¡gina", "sitio", "landing"],
+            "desarrollo_web": ["web", "pagina", "página", "sitio", "landing"],
             "automatizacion_ia": ["automatiz", "bot", "ia", "inteligencia artificial"],
             "ecommerce": ["tienda", "carrito", "ecommerce", "e-commerce"],
-            "app_movil": ["movil", "mÃ³vil", "app", "android", "ios"],
+            "app_movil": ["movil", "móvil", "app", "android", "ios"],
             "consultoria_cloud": ["cloud", "nube", "devops", "servidor"],
         }
         for clave, info in CATALOGO_SERVICIOS.items():
@@ -572,7 +572,7 @@ class RepositorioSupabase(RepositorioEntorno):
         http_client: Optional[httpx.Client] = None,
     ) -> None:
         super().__init__(negocio_id=negocio_id)
-        self.base_rest = supabase_url.strip().rstrip("/") + "/rest/v1"
+        self.base_rest = supabase_url.strip().rstrip("/").removesuffix("/rest/v1") + "/rest/v1"
         key_limpia = supabase_key.strip()
         self.headers = {
             "apikey": key_limpia,

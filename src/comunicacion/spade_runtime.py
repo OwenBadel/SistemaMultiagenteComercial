@@ -23,7 +23,7 @@ async def iniciar_agentes_spade(
       contra el servidor PyJabber embebido de SPADE.
     - Con `usar_xmpp_embebido=False`, registra los agentes directamente en el
       `spade.container.Container` enlazado al event loop actual y arranca sus
-      comportamientos asÃ­ncronos (`CyclicBehaviour` / `OneShotBehaviour`).
+      comportamientos asíncronos (`CyclicBehaviour` / `OneShotBehaviour`).
     """
     lista = list(agentes)
     if usar_xmpp_embebido:

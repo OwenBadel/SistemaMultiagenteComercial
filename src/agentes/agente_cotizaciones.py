@@ -21,7 +21,7 @@ from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 
 @dataclass
 class PlanExtraccionDatos:
-    """Plan MAS-ML para extraer y validar los parÃ¡metros obligatorios del servicio."""
+    """Plan MAS-ML para extraer y validar los parámetros obligatorios del servicio."""
 
     nombre: str = "PlanExtraccionDatos"
     objetivo: str = "Garantizar que existan variables obligatorias antes de liquidar"
@@ -32,14 +32,14 @@ class PlanCalculoTarifa:
     """Plan MAS-ML para calcular costos mediante RandomForestRegressor."""
 
     nombre: str = "PlanCalculoTarifa"
-    objetivo: str = "Dar valoraciÃ³n econÃ³mica precisa y comprensible con desglose"
+    objetivo: str = "Dar valoración económica precisa y comprensible con desglose"
 
 
 class AgenteCotizaciones(AgenteBaseMASML):
     """
     <<agent>> AgenteCotizaciones:
     Liquida presupuestos formales usando RandomForestRegressor sobre el
-    histÃ³rico de cotizaciones de EntornoVirtualAtencion.
+    histórico de cotizaciones de EntornoVirtualAtencion.
     """
 
     PARAMETROS_OBLIGATORIOS = ("tipo_servicio", "horas_estimadas")
@@ -77,7 +77,7 @@ class AgenteCotizaciones(AgenteBaseMASML):
         }
 
     class ComportamientoLiquidador(CyclicBehaviour):
-        """Escucha solicitudes REQUEST de cÃ¡lculo de costos desde Coordinador."""
+        """Escucha solicitudes REQUEST de cálculo de costos desde Coordinador."""
 
         async def run(self) -> None:
             msg: Message | None = await self.receive(timeout=0.2)
@@ -189,7 +189,7 @@ class AgenteCotizaciones(AgenteBaseMASML):
         payload = extraer_payload_fipa(msg)
         parametros = dict(payload.get("parametros_servicio", {}))
 
-        # Respuesta inmediata AGREE segÃºn Diagrama de Secuencia 1
+        # Respuesta inmediata AGREE según Diagrama de Secuencia 1
         await self.enviar_fipa(
             comportamiento,
             JID_COORDINADOR,
@@ -200,7 +200,7 @@ class AgenteCotizaciones(AgenteBaseMASML):
             payload_extra={"id_cliente": payload.get("id_cliente", "cliente_001")},
         )
 
-        # Consulta histÃ³rico al entorno (datos(tarifas_historicas))
+        # Consulta histórico al entorno (datos(tarifas_historicas))
         referencias = self.entorno.consultarTarifasHistoricas(parametros)
         self.creencias["cotizacionesHistoricas"] = referencias["registros"]
 

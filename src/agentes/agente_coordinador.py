@@ -30,7 +30,7 @@ class PlanEnrutamiento:
     """Plan MAS-ML para enrutar peticiones desde Ventas hacia especialistas."""
 
     nombre: str = "PlanEnrutamiento"
-    objetivo: str = "Asignar cada caso comercial al especialista correcto con mÃ­nima latencia"
+    objetivo: str = "Asignar cada caso comercial al especialista correcto con mínima latencia"
 
 
 @dataclass
@@ -38,15 +38,15 @@ class PlanIntermediarPromo:
     """Plan MAS-ML para solicitar, evaluar utilidad e intermediar promociones."""
 
     nombre: str = "PlanIntermediarPromo"
-    objetivo: str = "Maximizar cierre comercial protegiendo el margen mÃ­nimo de ganancia"
+    objetivo: str = "Maximizar cierre comercial protegiendo el margen mínimo de ganancia"
 
 
 @dataclass
 class PlanEscalar:
-    """Plan MAS-ML para suspender automatizaciÃ³n y escalar casos hostiles al humano."""
+    """Plan MAS-ML para suspender automatización y escalar casos hostiles al humano."""
 
     nombre: str = "PlanEscalar"
-    objetivo: str = "Garantizar intervenciÃ³n humana inmediata ante quejas o tono hostil"
+    objetivo: str = "Garantizar intervención humana inmediata ante quejas o tono hostil"
 
 
 class AgenteCoordinador(AgenteBaseMASML):
@@ -96,7 +96,7 @@ class AgenteCoordinador(AgenteBaseMASML):
         self._contexto_conversaciones: Dict[str, Dict[str, Any]] = {}
 
     class ComportamientoOrquestador(CyclicBehaviour):
-        """Comportamiento SPADE asÃ­ncrono que procesa mensajes FIPA-ACL entrantes."""
+        """Comportamiento SPADE asíncrono que procesa mensajes FIPA-ACL entrantes."""
 
         async def run(self) -> None:
             msg: Message | None = await self.receive(timeout=0.2)
@@ -119,7 +119,7 @@ class AgenteCoordinador(AgenteBaseMASML):
         payload: Dict[str, Any],
         conversation_id: str,
     ) -> None:
-        """Enruta peticiones de AgenteVentas al especialista bajo relaciÃ³n <<control>>."""
+        """Enruta peticiones de AgenteVentas al especialista bajo relación <<control>>."""
         self.creencias["casosEscalados"].append(
             {"conversation_id": conversation_id, "tipo": tipo_peticion, **payload}
         )
@@ -131,7 +131,7 @@ class AgenteCoordinador(AgenteBaseMASML):
 
         if tipo_peticion == "cotizacion":
             if not self.organizacion.verificar_control("Coordinador", "LiquidadorCotizaciones"):
-                raise PermissionError("RelaciÃ³n <<control>> invÃ¡lida sobre LiquidadorCotizaciones")
+                raise PermissionError("Relación <<control>> inválida sobre LiquidadorCotizaciones")
             self.registrar_accion("enrutarPeticion()", "caso=cotizacion -> AgenteCotizaciones")
 
             await self.enviar_fipa(
@@ -163,7 +163,7 @@ class AgenteCoordinador(AgenteBaseMASML):
 
         elif tipo_peticion == "agendamiento":
             if not self.organizacion.verificar_control("Coordinador", "GestorAgenda"):
-                raise PermissionError("RelaciÃ³n <<control>> invÃ¡lida sobre GestorAgenda")
+                raise PermissionError("Relación <<control>> inválida sobre GestorAgenda")
             cotizacion_aprobada = bool(
                 payload.get("cotizacion_aprobada")
                 or self.creencias.get("cotizacionCalculada") is not None
@@ -205,9 +205,9 @@ class AgenteCoordinador(AgenteBaseMASML):
         payload: Dict[str, Any],
         conversation_id: str,
     ) -> None:
-        """Solicita al AgentePromociones calcular descuento Ã³ptimo cuidando margen."""
+        """Solicita al AgentePromociones calcular descuento óptimo cuidando margen."""
         if not self.organizacion.verificar_control("Coordinador", "AnalistaPromociones"):
-            raise PermissionError("RelaciÃ³n <<control>> invÃ¡lida sobre AnalistaPromociones")
+            raise PermissionError("Relación <<control>> inválida sobre AnalistaPromociones")
         self.registrar_accion(
             "solicitarEvaluacionPromo()",
             f"indecision={payload.get('nivel_indecision', 0.72)}",
@@ -234,9 +234,9 @@ class AgenteCoordinador(AgenteBaseMASML):
         self, descuento_porciento: float, cotizacion_actual: float
     ) -> Dict[str, Any]:
         """
-        FunciÃ³n de utilidad racional del AgenteCoordinador:
-        EvalÃºa si el descuento propuesto protege el margen mÃ­nimo de ganancia (22%)
-        y respeta el tope mÃ¡ximo permitido (15%), maximizando la conversiÃ³n esperada.
+        Función de utilidad racional del AgenteCoordinador:
+        Evalúa si el descuento propuesto protege el margen mínimo de ganancia (22%)
+        y respeta el tope máximo permitido (15%), maximizando la conversión esperada.
         """
         bd = self.entorno.tarifasYMargenes
         margen_base = bd.margen_base_estimado
@@ -270,7 +270,7 @@ class AgenteCoordinador(AgenteBaseMASML):
     ) -> None:
         """
         Aplica la regla de canal centralizado de promociones entregando la
-        oferta aprobada Ãºnicamente al AgenteVentas.
+        oferta aprobada únicamente al AgenteVentas.
         """
         self.registrar_accion(
             "transferirPromoAVentas()",
@@ -291,9 +291,9 @@ class AgenteCoordinador(AgenteBaseMASML):
         )
 
     def evaluarRiesgoYSuspenderSistema(self, motivo_critico: str) -> Dict[str, Any]:
-        """EvalÃºa el riesgo crÃ­tico reportado por Ventas y prepara la pausa del sistema."""
+        """Evalúa el riesgo crítico reportado por Ventas y prepara la pausa del sistema."""
         self.registrar_accion(
-            "evaluarRiesgoYSuspenderSistema()", f"riesgo=CRÃTICO ({motivo_critico})"
+            "evaluarRiesgoYSuspenderSistema()", f"riesgo=CRÍTICO ({motivo_critico})"
         )
         return {"riesgo": "alto", "suspender_automatizacion": True, "motivo": motivo_critico}
 
