@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from rich.console import Console
 from rich.table import Table
@@ -42,7 +42,6 @@ class ServicioMultiagenteComercial:
 
     def __init__(
         self,
-        ruta_data: Optional[Path] = None,
         config_botpress: Optional[ConfiguracionBotpress] = None,
         repositorio: Optional[RepositorioEntorno] = None,
         usar_xmpp_embebido: bool = True,
@@ -50,7 +49,6 @@ class ServicioMultiagenteComercial:
         silencioso: bool = False,
     ) -> None:
         raiz = Path(__file__).resolve().parents[2]
-        self.ruta_data = ruta_data or (raiz / "data")
         self.config_botpress = config_botpress or ConfiguracionBotpress.desde_entorno(
             raiz / ".env"
         )
@@ -338,34 +336,6 @@ class ServicioMultiagenteComercial:
             "alerta_humana": alerta_humana,
         }
 
-    async def responder_como_humano(
-        self, id_cliente: str, texto: str, canal: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Accion Human-in-the-Loop: registra la respuesta del asesor humano para
-        el cliente en el canal asociado.
-        """
-        perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
-        canal_destino = canal or str(perfil.get("canal", "Botpress"))
-        perfil["historial_interacciones"].append(
-            {"rol": "profesional_humano", "texto": texto}
-        )
-        self.entorno.plataformas.emitir_respuesta_canal(
-            canal=canal_destino,
-            id_cliente=id_cliente,
-            accion="respuesta_directa_humano",
-            contenido=texto,
-        )
-        self.monitor.registrar_evento_entorno(
-            f"HumanInTheLoop -> Botpress[{canal_destino}]",
-            f"cliente={id_cliente} | '{texto}'",
-        )
-        return {
-            "id_cliente": id_cliente,
-            "canal": canal_destino,
-            "texto": texto,
-        }
-
     def reactivar_automatizacion(self, id_cliente: str) -> Dict[str, Any]:
         """Devuelve el control del chat de un cliente desde el humano al SMA."""
         perfil = self.entorno.perfilesClientes.actualizar_perfil(
@@ -381,7 +351,3 @@ class ServicioMultiagenteComercial:
             f"Automatizacion reactivada para cliente={id_cliente}",
         )
         return perfil
-
-
-# Alias compatible con referencias previas
-SistemaComercialOrquestador = ServicioMultiagenteComercial

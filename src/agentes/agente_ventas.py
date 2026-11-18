@@ -77,7 +77,6 @@ class AgenteVentas(AgenteBaseMASML):
             "PlanAtencionInicial": PlanAtencionInicial(),
             "PlanCierreConPromo": PlanCierreConPromo(),
         }
-        self._automatizacion_activa: bool = True
 
     class ComportamientoEscuchaFIPA(CyclicBehaviour):
         """Recibe respuestas del AgenteCoordinador mediante mensajes FIPA-ACL."""
@@ -256,7 +255,6 @@ class AgenteVentas(AgenteBaseMASML):
             )
             return
 
-        self._automatizacion_activa = True
         analisis = self.interpretarLenguajeNatural(texto=texto, tipo_evento=tipo_evento)
         self.entorno.perfilesClientes.actualizar_perfil(
             id_cliente, tono_actual=analisis["tono_cliente"]
@@ -492,7 +490,6 @@ class AgenteVentas(AgenteBaseMASML):
             )
 
         elif perf == "CANCEL" and "cancelar_accion" in contenido:
-            self._automatizacion_activa = False
             self.registrar_accion("pausarChatAutomatico()", f"cliente={id_cliente}")
             await self.enviar_fipa(
                 comportamiento,

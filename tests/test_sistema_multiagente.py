@@ -26,7 +26,7 @@ from src.entorno.entorno_virtual import EntornoVirtualAtencion
 from src.escenarios.orquestador_escenarios import ServicioMultiagenteComercial
 from src.integracion_botpress.configuracion import ConfiguracionBotpress
 from src.integracion_botpress.servidor_botpress import crear_app_botpress
-from src.ml.datasets import inicializar_datasets
+from src.ml.datasets import generar_historico_ofertas, generar_tarifas_historicas
 from src.ml.modelos_ml import ModeloCotizacionesRF, ModeloNLPVentas, ModeloPromocionesKNN
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 from src.persistencia.repositorio import RepositorioSQLite, RepositorioSupabase
@@ -39,7 +39,8 @@ def _extraer_performativas(mensajes_fipa: List[dict]) -> List[str]:
 
 def test_estructura_masml_roles_control_y_dependencias() -> None:
     """Verifica composicion de 5 roles, 4 controles, 5 dependencias y reglas MAS-ML."""
-    df_t, df_o = inicializar_datasets(RAIZ / "data")
+    df_t = generar_tarifas_historicas()
+    df_o = generar_historico_ofertas()
     entorno = EntornoVirtualAtencion(tarifas_historicas=df_t, historico_ofertas=df_o)
     org = SistemaMultiagenteComercial(entorno=entorno)
 
@@ -85,7 +86,8 @@ def test_estructura_masml_roles_control_y_dependencias() -> None:
 
 def test_modelos_sklearn_y_datasets() -> None:
     """Valida datasets >=30 filas y metricas predictivas de los 3 modelos Scikit-Learn."""
-    df_tarifas, df_ofertas = inicializar_datasets(RAIZ / "data")
+    df_tarifas = generar_tarifas_historicas()
+    df_ofertas = generar_historico_ofertas()
     assert len(df_tarifas) >= 30
     assert len(df_ofertas) >= 30
 
@@ -139,7 +141,6 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
 
     async def _run() -> None:
         servicio = ServicioMultiagenteComercial(
-            ruta_data=RAIZ / "data",
             config_botpress=ConfiguracionBotpress(),
             usar_xmpp_embebido=False,
             silencioso=True,
@@ -190,7 +191,6 @@ def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
 
     async def _run() -> None:
         servicio = ServicioMultiagenteComercial(
-            ruta_data=RAIZ / "data",
             config_botpress=ConfiguracionBotpress(),
             usar_xmpp_embebido=False,
             silencioso=True,
@@ -250,7 +250,6 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
 
     async def _run() -> None:
         servicio = ServicioMultiagenteComercial(
-            ruta_data=RAIZ / "data",
             config_botpress=ConfiguracionBotpress(),
             usar_xmpp_embebido=False,
             silencioso=True,
@@ -336,12 +335,6 @@ def test_agendamiento_y_escalamiento_human_in_the_loop() -> None:
             assert res_otro_cliente["responder_al_cliente"] is True
             assert res_otro_cliente["accion"] == "cotizacion_entregada"
 
-            envio_manual = await servicio.responder_como_humano(
-                id_cliente="573009998877",
-                texto="Hola Pedro, te atiende el supervisor comercial directamente.",
-            )
-            assert envio_manual["canal"] == "WhatsApp"
-
             perfil_reactivado = servicio.reactivar_automatizacion("573009998877")
             assert perfil_reactivado["automatizacion_activa"] is True
         finally:
@@ -365,7 +358,6 @@ def test_endpoints_botpress_y_panel_humano() -> None:
             owner_whatsapp_number="573005551122",
         )
         servicio = ServicioMultiagenteComercial(
-            ruta_data=RAIZ / "data",
             config_botpress=config,
             usar_xmpp_embebido=False,
             silencioso=True,

@@ -169,13 +169,11 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
             ],
             "mensajes_fipa": servicio_sma.monitor.historial_mensajes[-40:],
             "eventos_entorno": servicio_sma.monitor.historial_eventos_entorno[-30:],
-            "acciones_agentes": servicio_sma.monitor.historial_acciones[-40:],
             "perfiles_clientes": list(
                 servicio_sma.entorno.perfilesClientes.perfiles.values()
             ),
             "alertas_humanas": servicio_sma.entorno.alertas_humanas,
             "agenda_virtual": servicio_sma.entorno.agendaVirtual.bloques,
-            "bandeja_salida": servicio_sma.entorno.plataformas.bandeja_salida[-25:],
         }
 
     @app.post("/api/humano/reactivar")

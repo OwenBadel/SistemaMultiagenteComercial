@@ -13,8 +13,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
+from src.ml.datasets import CATALOGO_SERVICIOS
 from src.persistencia.repositorio import (
-    CATALOGO_DEFAULT_SEED,
     RepositorioEntorno,
     RepositorioSQLite,
 )
@@ -28,7 +28,7 @@ class RedesSociales:
         default_factory=lambda: ["WhatsApp", "Instagram", "Facebook", "Webchat", "Botpress"]
     )
     portafolio_servicios: Dict[str, Dict[str, Any]] = field(
-        default_factory=lambda: dict(CATALOGO_DEFAULT_SEED)
+        default_factory=lambda: dict(CATALOGO_SERVICIOS)
     )
     bandeja_entrada: List[Dict[str, Any]] = field(default_factory=list)
     bandeja_salida: List[Dict[str, Any]] = field(default_factory=list)
@@ -189,7 +189,7 @@ class EntornoVirtualAtencion:
     ) -> None:
         self.repositorio: RepositorioEntorno = repositorio or RepositorioSQLite(":memory:")
         self.config_negocio: Dict[str, Any] = self.repositorio.obtener_configuracion_negocio()
-        catalogo = self.repositorio.obtener_catalogo_servicios() or dict(CATALOGO_DEFAULT_SEED)
+        catalogo = self.repositorio.obtener_catalogo_servicios() or dict(CATALOGO_SERVICIOS)
 
         df_tarifas = (
             tarifas_historicas

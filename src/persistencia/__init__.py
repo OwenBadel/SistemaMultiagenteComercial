@@ -6,7 +6,6 @@ Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 
 from src.persistencia.repositorio import (
-    CATALOGO_DEFAULT_SEED,
     RepositorioEntorno,
     RepositorioSQLite,
     RepositorioSupabase,
@@ -14,7 +13,6 @@ from src.persistencia.repositorio import (
 )
 
 __all__ = [
-    "CATALOGO_DEFAULT_SEED",
     "RepositorioEntorno",
     "RepositorioSQLite",
     "RepositorioSupabase",

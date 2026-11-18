@@ -114,7 +114,6 @@ async def _ejecutar_servidor(
     """Inicializa los 5 agentes SPADE y sirve FastAPI + Uvicorn hasta recibir cierre."""
     consola = Console()
     servicio = ServicioMultiagenteComercial(
-        ruta_data=RAIZ_PROYECTO / "data",
         config_botpress=config_botpress,
         usar_xmpp_embebido=usar_xmpp_embebido,
         consola=consola,

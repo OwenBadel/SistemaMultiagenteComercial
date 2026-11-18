@@ -6,7 +6,6 @@ Autores: Owen Badel, Maverick Diaz, Jesus Viloria
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -184,21 +183,4 @@ def generar_historico_ofertas(n_registros: int = 45, seed: int = 42) -> pd.DataF
         )
 
     return pd.DataFrame(registros)
-
-
-def inicializar_datasets(directorio_data: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Crea el directorio data/ si no existe, genera e inicializa ambos archivos CSV
-    (mínimo 30 registros cada uno; aquí 45 cada uno) y los retorna como DataFrames.
-    """
-    directorio_data.mkdir(parents=True, exist_ok=True)
-    ruta_tarifas = directorio_data / "tarifas_historicas.csv"
-    ruta_ofertas = directorio_data / "historico_ofertas.csv"
-
-    df_tarifas = generar_tarifas_historicas(n_registros=45)
-    df_ofertas = generar_historico_ofertas(n_registros=45)
-
-    df_tarifas.to_csv(ruta_tarifas, index=False, encoding="utf-8")
-    df_ofertas.to_csv(ruta_ofertas, index=False, encoding="utf-8")
-    return df_tarifas, df_ofertas
 

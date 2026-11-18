@@ -14,7 +14,7 @@ import json
 import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
 import pandas as pd
@@ -24,8 +24,6 @@ from src.ml.datasets import (
     generar_historico_ofertas,
     generar_tarifas_historicas,
 )
-
-CATALOGO_DEFAULT_SEED = CATALOGO_SERVICIOS
 
 
 class RepositorioEntorno(ABC):
@@ -87,20 +85,144 @@ class RepositorioEntorno(ABC):
         ...
 
 
-def _normalizar_lista_palabras(valor: Any) -> List[str]:
-    if isinstance(valor, list):
-        return [str(v).strip().lower() for v in valor if str(v).strip()]
+def _parse_json_o_lista(valor: Any, fallback: Any) -> Any:
+    if valor is None:
+        return fallback
+    if isinstance(valor, (list, dict)):
+        return valor
     if isinstance(valor, str):
         texto = valor.strip()
-        if texto.startswith("["):
+        if not texto:
+            return fallback
+        if texto.startswith(("[", "{")):
             try:
-                parsed = json.loads(texto)
-                if isinstance(parsed, list):
-                    return [str(v).strip().lower() for v in parsed if str(v).strip()]
+                return json.loads(texto)
             except json.JSONDecodeError:
                 pass
-        return [p.strip().lower() for p in texto.split(",") if p.strip()]
-    return []
+        if isinstance(fallback, list):
+            return [p.strip().lower() for p in texto.split(",") if p.strip()]
+    return fallback
+
+
+def _mapear_catalogo(filas: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
+    catalogo: Dict[str, Dict[str, Any]] = {}
+    for row in filas:
+        r = dict(row)
+        tarifa = float(r["tarifa_unitaria"])
+        palabras = [
+            str(p).strip().lower()
+            for p in _parse_json_o_lista(r.get("palabras_clave"), [])
+            if str(p).strip()
+        ]
+        catalogo[str(r["clave"])] = {
+            "id": int(r["servicio_id_num"]),
+            "nombre": str(r["nombre"]),
+            "descripcion": str(r["descripcion"]),
+            "tarifa_unitaria": tarifa,
+            "tarifa_hora_cop": tarifa,
+            "palabras_clave": palabras,
+            "requiere_complejidad": bool(r.get("requiere_complejidad", True)),
+            "costo_adicional_mantenimiento": float(
+                r.get("costo_adicional_mantenimiento", 380_000.0)
+            ),
+        }
+    return catalogo
+
+
+def _mapear_promociones(filas: Iterable[Any]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "codigo": str(r["codigo"]),
+            "descripcion": str(r["descripcion"]),
+            "descuento_max": float(r["descuento_max"]),
+            "activa": bool(dict(r).get("activa", True)),
+        }
+        for r in filas
+    ]
+
+
+def _mapear_tarifas_df(filas: Iterable[Any]) -> pd.DataFrame:
+    registros = []
+    for row in filas:
+        r = dict(row)
+        cant = int(r["cantidad_unidades"])
+        inc = int(r["incluye_adicional"])
+        base = float(r["costo_base"])
+        total = float(r["costo_total"])
+        registros.append(
+            {
+                "id_cotizacion": r["id_cotizacion"],
+                "tipo_servicio": r["tipo_servicio"],
+                "tipo_servicio_id": int(r["tipo_servicio_id"]),
+                "complejidad": int(r["complejidad"]),
+                "cantidad_unidades": cant,
+                "horas_estimadas": cant,
+                "urgencia_dias": int(r["urgencia_dias"]),
+                "incluye_adicional": inc,
+                "incluye_mantenimiento": inc,
+                "costo_base": base,
+                "costo_base_cop": base,
+                "costo_total": total,
+                "costo_total_cop": total,
+                "margen_estimado": float(r["margen_estimado"]),
+            }
+        )
+    return pd.DataFrame(registros)
+
+
+def _mapear_bloques(filas: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
+    return {
+        str(r["fecha_hora"]): {
+            "estado": str(r["estado"]),
+            "cliente": dict(r).get("cliente"),
+        }
+        for r in filas
+    }
+
+
+def _mapear_perfiles(filas: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
+    resultado: Dict[str, Dict[str, Any]] = {}
+    for row in filas:
+        r = dict(row)
+        resultado[str(r["id_cliente"])] = {
+            "id_cliente": str(r["id_cliente"]),
+            "nombre": str(r["nombre"]),
+            "canal": str(r["canal"]),
+            "historial_interacciones": _parse_json_o_lista(
+                r.get("historial_interacciones"), []
+            ),
+            "tono_actual": str(r.get("tono_actual", "neutral")),
+            "fidelidad": int(r.get("fidelidad", 1)),
+            "ultima_cotizacion": r.get("ultima_cotizacion"),
+            "ultima_complejidad": int(r.get("ultima_complejidad", 3)),
+            "parametros_parciales": _parse_json_o_lista(
+                r.get("parametros_parciales"), {}
+            ),
+            "esperando_parametros_cotizacion": bool(
+                r.get("esperando_parametros_cotizacion", False)
+            ),
+            "promocion_aplicada": r.get("promocion_aplicada"),
+            "automatizacion_activa": bool(r.get("automatizacion_activa", True)),
+        }
+    return resultado
+
+
+def _mapear_alertas(filas: Iterable[Any]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "timestamp": str(r["timestamp"]),
+            "id_cliente": str(r["id_cliente"]),
+            "nombre": str(r["nombre"]),
+            "canal": str(r["canal"]),
+            "motivo_critico": str(r["motivo_critico"]),
+            "historial_charla": _parse_json_o_lista(
+                dict(r).get("historial_charla"), []
+            ),
+            "estado": str(r["estado"]),
+            "resuelta": bool(dict(r).get("resuelta", False)),
+        }
+        for r in filas
+    ]
 
 
 def _config_negocio_default(negocio_id: str) -> Dict[str, Any]:
@@ -169,8 +291,7 @@ class RepositorioSQLite(RepositorioEntorno):
             self._asegurar_datos_iniciales()
 
     def _crear_tablas(self) -> None:
-        cur = self._conn.cursor()
-        cur.executescript(
+        self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS negocios (
                 id TEXT PRIMARY KEY,
@@ -186,7 +307,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 descuento_maximo REAL NOT NULL DEFAULT 15.0,
                 mensaje_catalogo_intro TEXT NOT NULL
             );
-
             CREATE TABLE IF NOT EXISTS servicios (
                 negocio_id TEXT NOT NULL,
                 clave TEXT NOT NULL,
@@ -199,7 +319,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 costo_adicional_mantenimiento REAL NOT NULL DEFAULT 380000.0,
                 PRIMARY KEY (negocio_id, clave)
             );
-
             CREATE TABLE IF NOT EXISTS promociones_vigentes (
                 negocio_id TEXT NOT NULL,
                 codigo TEXT NOT NULL,
@@ -208,7 +327,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 activa INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY (negocio_id, codigo)
             );
-
             CREATE TABLE IF NOT EXISTS tarifas_historicas (
                 negocio_id TEXT NOT NULL,
                 id_cotizacion TEXT NOT NULL,
@@ -223,7 +341,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 margen_estimado REAL NOT NULL,
                 PRIMARY KEY (negocio_id, id_cotizacion)
             );
-
             CREATE TABLE IF NOT EXISTS historico_ofertas (
                 negocio_id TEXT NOT NULL,
                 id_oferta TEXT NOT NULL,
@@ -235,7 +352,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 cerrado_exitosamente INTEGER NOT NULL,
                 PRIMARY KEY (negocio_id, id_oferta)
             );
-
             CREATE TABLE IF NOT EXISTS agenda_bloques (
                 negocio_id TEXT NOT NULL,
                 fecha_hora TEXT NOT NULL,
@@ -243,7 +359,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 cliente TEXT,
                 PRIMARY KEY (negocio_id, fecha_hora)
             );
-
             CREATE TABLE IF NOT EXISTS perfiles_clientes (
                 negocio_id TEXT NOT NULL,
                 id_cliente TEXT NOT NULL,
@@ -260,7 +375,6 @@ class RepositorioSQLite(RepositorioEntorno):
                 automatizacion_activa INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY (negocio_id, id_cliente)
             );
-
             CREATE TABLE IF NOT EXISTS alertas_humanas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 negocio_id TEXT NOT NULL,
@@ -279,10 +393,7 @@ class RepositorioSQLite(RepositorioEntorno):
 
     def _asegurar_datos_iniciales(self) -> None:
         cur = self._conn.cursor()
-        row = cur.execute(
-            "SELECT id FROM negocios WHERE id = ?", (self.negocio_id,)
-        ).fetchone()
-        if row is not None:
+        if cur.execute("SELECT id FROM negocios WHERE id = ?", (self.negocio_id,)).fetchone():
             return
 
         cfg = _config_negocio_default(self.negocio_id)
@@ -295,18 +406,10 @@ class RepositorioSQLite(RepositorioEntorno):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                cfg["id"],
-                cfg["nombre_negocio"],
-                cfg["rubro"],
-                cfg["moneda"],
-                cfg["unidad_cantidad"],
-                cfg["etiqueta_cantidad"],
-                cfg["etiqueta_complejidad"],
-                cfg["telefono_dueno"],
-                cfg["margen_base"],
-                cfg["margen_minimo"],
-                cfg["descuento_maximo"],
-                cfg["mensaje_catalogo_intro"],
+                cfg["id"], cfg["nombre_negocio"], cfg["rubro"], cfg["moneda"],
+                cfg["unidad_cantidad"], cfg["etiqueta_cantidad"], cfg["etiqueta_complejidad"],
+                cfg["telefono_dueno"], cfg["margen_base"], cfg["margen_minimo"],
+                cfg["descuento_maximo"], cfg["mensaje_catalogo_intro"],
             ),
         )
 
@@ -317,7 +420,7 @@ class RepositorioSQLite(RepositorioEntorno):
             "app_movil": ["movil", "móvil", "app", "android", "ios"],
             "consultoria_cloud": ["cloud", "nube", "devops", "servidor"],
         }
-        for clave, info in CATALOGO_DEFAULT_SEED.items():
+        for clave, info in CATALOGO_SERVICIOS.items():
             cur.execute(
                 """
                 INSERT INTO servicios (
@@ -327,36 +430,20 @@ class RepositorioSQLite(RepositorioEntorno):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    self.negocio_id,
-                    clave,
-                    int(info["id"]),
-                    str(info["nombre"]),
-                    str(info["descripcion"]),
-                    float(info["tarifa_hora_cop"]),
+                    self.negocio_id, clave, int(info["id"]), str(info["nombre"]),
+                    str(info["descripcion"]), float(info["tarifa_hora_cop"]),
                     json.dumps(palabras_base.get(clave, [clave]), ensure_ascii=False),
-                    1,
-                    380_000.0,
+                    1, 380_000.0,
                 ),
             )
 
         for p in _promos_default():
             cur.execute(
-                """
-                INSERT INTO promociones_vigentes (
-                    negocio_id, codigo, descripcion, descuento_max, activa
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    self.negocio_id,
-                    p["codigo"],
-                    p["descripcion"],
-                    p["descuento_max"],
-                    1 if p["activa"] else 0,
-                ),
+                "INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa) VALUES (?, ?, ?, ?, ?)",
+                (self.negocio_id, p["codigo"], p["descripcion"], p["descuento_max"], 1 if p["activa"] else 0),
             )
 
-        df_tarifas = generar_tarifas_historicas(n_registros=45)
-        for _, r in df_tarifas.iterrows():
+        for _, r in generar_tarifas_historicas(n_registros=45).iterrows():
             cur.execute(
                 """
                 INSERT INTO tarifas_historicas (
@@ -366,22 +453,14 @@ class RepositorioSQLite(RepositorioEntorno):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    self.negocio_id,
-                    str(r["id_cotizacion"]),
-                    str(r["tipo_servicio"]),
-                    int(r["tipo_servicio_id"]),
-                    int(r["complejidad"]),
-                    int(r["horas_estimadas"]),
-                    int(r["urgencia_dias"]),
-                    int(r["incluye_mantenimiento"]),
-                    float(r["costo_base_cop"]),
-                    float(r["costo_total_cop"]),
-                    float(r["margen_estimado"]),
+                    self.negocio_id, str(r["id_cotizacion"]), str(r["tipo_servicio"]),
+                    int(r["tipo_servicio_id"]), int(r["complejidad"]), int(r["horas_estimadas"]),
+                    int(r["urgencia_dias"]), int(r["incluye_mantenimiento"]),
+                    float(r["costo_base_cop"]), float(r["costo_total_cop"]), float(r["margen_estimado"]),
                 ),
             )
 
-        df_ofertas = generar_historico_ofertas(n_registros=45)
-        for _, r in df_ofertas.iterrows():
+        for _, r in generar_historico_ofertas(n_registros=45).iterrows():
             cur.execute(
                 """
                 INSERT INTO historico_ofertas (
@@ -391,95 +470,44 @@ class RepositorioSQLite(RepositorioEntorno):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    self.negocio_id,
-                    str(r["id_oferta"]),
-                    float(r["monto_cotizado"]),
-                    float(r["nivel_indecision"]),
-                    int(r["complejidad"]),
-                    int(r["fidelidad_cliente"]),
-                    float(r["porcentaje_descuento_optimo"]),
+                    self.negocio_id, str(r["id_oferta"]), float(r["monto_cotizado"]),
+                    float(r["nivel_indecision"]), int(r["complejidad"]),
+                    int(r["fidelidad_cliente"]), float(r["porcentaje_descuento_optimo"]),
                     int(r["cerrado_exitosamente"]),
                 ),
             )
 
         for fh, info in _agenda_default().items():
             cur.execute(
-                """
-                INSERT INTO agenda_bloques (negocio_id, fecha_hora, estado, cliente)
-                VALUES (?, ?, ?, ?)
-                """,
+                "INSERT INTO agenda_bloques (negocio_id, fecha_hora, estado, cliente) VALUES (?, ?, ?, ?)",
                 (self.negocio_id, fh, info["estado"], info["cliente"]),
             )
         self._conn.commit()
 
     def obtener_configuracion_negocio(self) -> Dict[str, Any]:
-        row = self._conn.execute(
-            "SELECT * FROM negocios WHERE id = ?", (self.negocio_id,)
-        ).fetchone()
-        if row is None:
-            return _config_negocio_default(self.negocio_id)
-        return dict(row)
+        row = self._conn.execute("SELECT * FROM negocios WHERE id = ?", (self.negocio_id,)).fetchone()
+        return dict(row) if row is not None else _config_negocio_default(self.negocio_id)
 
     def obtener_catalogo_servicios(self) -> Dict[str, Dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM servicios WHERE negocio_id = ? ORDER BY servicio_id_num",
             (self.negocio_id,),
         ).fetchall()
-        catalogo: Dict[str, Dict[str, Any]] = {}
-        for r in rows:
-            catalogo[str(r["clave"])] = {
-                "id": int(r["servicio_id_num"]),
-                "nombre": str(r["nombre"]),
-                "descripcion": str(r["descripcion"]),
-                "tarifa_unitaria": float(r["tarifa_unitaria"]),
-                "tarifa_hora_cop": float(r["tarifa_unitaria"]),
-                "palabras_clave": _normalizar_lista_palabras(r["palabras_clave"]),
-                "requiere_complejidad": bool(r["requiere_complejidad"]),
-                "costo_adicional_mantenimiento": float(r["costo_adicional_mantenimiento"]),
-            }
-        return catalogo
+        return _mapear_catalogo(rows)
 
     def obtener_promociones_vigentes(self) -> List[Dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM promociones_vigentes WHERE negocio_id = ?",
             (self.negocio_id,),
         ).fetchall()
-        return [
-            {
-                "codigo": str(r["codigo"]),
-                "descripcion": str(r["descripcion"]),
-                "descuento_max": float(r["descuento_max"]),
-                "activa": bool(r["activa"]),
-            }
-            for r in rows
-        ]
+        return _mapear_promociones(rows)
 
     def obtener_tarifas_historicas(self) -> pd.DataFrame:
         rows = self._conn.execute(
             "SELECT * FROM tarifas_historicas WHERE negocio_id = ?",
             (self.negocio_id,),
         ).fetchall()
-        registros = []
-        for r in rows:
-            registros.append(
-                {
-                    "id_cotizacion": r["id_cotizacion"],
-                    "tipo_servicio": r["tipo_servicio"],
-                    "tipo_servicio_id": int(r["tipo_servicio_id"]),
-                    "complejidad": int(r["complejidad"]),
-                    "cantidad_unidades": int(r["cantidad_unidades"]),
-                    "horas_estimadas": int(r["cantidad_unidades"]),
-                    "urgencia_dias": int(r["urgencia_dias"]),
-                    "incluye_adicional": int(r["incluye_adicional"]),
-                    "incluye_mantenimiento": int(r["incluye_adicional"]),
-                    "costo_base": float(r["costo_base"]),
-                    "costo_base_cop": float(r["costo_base"]),
-                    "costo_total": float(r["costo_total"]),
-                    "costo_total_cop": float(r["costo_total"]),
-                    "margen_estimado": float(r["margen_estimado"]),
-                }
-            )
-        return pd.DataFrame(registros)
+        return _mapear_tarifas_df(rows)
 
     def obtener_historico_ofertas(self) -> pd.DataFrame:
         rows = self._conn.execute(
@@ -493,10 +521,7 @@ class RepositorioSQLite(RepositorioEntorno):
             "SELECT fecha_hora, estado, cliente FROM agenda_bloques WHERE negocio_id = ? ORDER BY fecha_hora",
             (self.negocio_id,),
         ).fetchall()
-        return {
-            str(r["fecha_hora"]): {"estado": str(r["estado"]), "cliente": r["cliente"]}
-            for r in rows
-        }
+        return _mapear_bloques(rows)
 
     def guardar_bloque_agenda(
         self, fecha_hora: str, estado: str, cliente: Optional[str] = None
@@ -518,23 +543,7 @@ class RepositorioSQLite(RepositorioEntorno):
             "SELECT * FROM perfiles_clientes WHERE negocio_id = ?",
             (self.negocio_id,),
         ).fetchall()
-        resultado: Dict[str, Dict[str, Any]] = {}
-        for r in rows:
-            resultado[str(r["id_cliente"])] = {
-                "id_cliente": str(r["id_cliente"]),
-                "nombre": str(r["nombre"]),
-                "canal": str(r["canal"]),
-                "historial_interacciones": json.loads(r["historial_interacciones"] or "[]"),
-                "tono_actual": str(r["tono_actual"]),
-                "fidelidad": int(r["fidelidad"]),
-                "ultima_cotizacion": r["ultima_cotizacion"],
-                "ultima_complejidad": int(r["ultima_complejidad"]),
-                "parametros_parciales": json.loads(r["parametros_parciales"] or "{}"),
-                "esperando_parametros_cotizacion": bool(r["esperando_parametros_cotizacion"]),
-                "promocion_aplicada": r["promocion_aplicada"],
-                "automatizacion_activa": bool(r["automatizacion_activa"]),
-            }
-        return resultado
+        return _mapear_perfiles(rows)
 
     def guardar_perfil_cliente(self, perfil: Dict[str, Any]) -> None:
         self._conn.execute(
@@ -581,19 +590,7 @@ class RepositorioSQLite(RepositorioEntorno):
             "SELECT * FROM alertas_humanas WHERE negocio_id = ? ORDER BY id",
             (self.negocio_id,),
         ).fetchall()
-        return [
-            {
-                "timestamp": str(r["timestamp"]),
-                "id_cliente": str(r["id_cliente"]),
-                "nombre": str(r["nombre"]),
-                "canal": str(r["canal"]),
-                "motivo_critico": str(r["motivo_critico"]),
-                "historial_charla": json.loads(r["historial_charla"] or "[]"),
-                "estado": str(r["estado"]),
-                "resuelta": bool(r["resuelta"]),
-            }
-            for r in rows
-        ]
+        return _mapear_alertas(rows)
 
     def registrar_alerta_humana(self, alerta: Dict[str, Any]) -> None:
         self._conn.execute(
@@ -674,10 +671,7 @@ class RepositorioSupabase(RepositorioEntorno):
         return data if isinstance(data, list) else []
 
     def _upsert(self, tabla: str, payload: Dict[str, Any], on_conflict: str) -> None:
-        headers = {
-            **self.headers,
-            "Prefer": "resolution=merge-duplicates,return=minimal",
-        }
+        headers = {**self.headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
         resp = self._client.post(
             f"{self.base_rest}/{tabla}",
             headers=headers,
@@ -694,77 +688,22 @@ class RepositorioSupabase(RepositorioEntorno):
         )
         resp.raise_for_status()
         filas = resp.json()
-        if isinstance(filas, list) and filas:
-            return dict(filas[0])
-        return _config_negocio_default(self.negocio_id)
+        return dict(filas[0]) if isinstance(filas, list) and filas else _config_negocio_default(self.negocio_id)
 
     def obtener_catalogo_servicios(self) -> Dict[str, Dict[str, Any]]:
-        filas = self._get("servicios", {"order": "servicio_id_num.asc"})
-        catalogo: Dict[str, Dict[str, Any]] = {}
-        for r in filas:
-            catalogo[str(r["clave"])] = {
-                "id": int(r["servicio_id_num"]),
-                "nombre": str(r["nombre"]),
-                "descripcion": str(r["descripcion"]),
-                "tarifa_unitaria": float(r["tarifa_unitaria"]),
-                "tarifa_hora_cop": float(r["tarifa_unitaria"]),
-                "palabras_clave": _normalizar_lista_palabras(r.get("palabras_clave")),
-                "requiere_complejidad": bool(r.get("requiere_complejidad", True)),
-                "costo_adicional_mantenimiento": float(
-                    r.get("costo_adicional_mantenimiento", 380_000.0)
-                ),
-            }
-        return catalogo
+        return _mapear_catalogo(self._get("servicios", {"order": "servicio_id_num.asc"}))
 
     def obtener_promociones_vigentes(self) -> List[Dict[str, Any]]:
-        filas = self._get("promociones_vigentes")
-        return [
-            {
-                "codigo": str(r["codigo"]),
-                "descripcion": str(r["descripcion"]),
-                "descuento_max": float(r["descuento_max"]),
-                "activa": bool(r.get("activa", True)),
-            }
-            for r in filas
-        ]
+        return _mapear_promociones(self._get("promociones_vigentes"))
 
     def obtener_tarifas_historicas(self) -> pd.DataFrame:
-        filas = self._get("tarifas_historicas")
-        registros = []
-        for r in filas:
-            cant = int(r["cantidad_unidades"])
-            inc = int(r["incluye_adicional"])
-            base = float(r["costo_base"])
-            total = float(r["costo_total"])
-            registros.append(
-                {
-                    "id_cotizacion": r["id_cotizacion"],
-                    "tipo_servicio": r["tipo_servicio"],
-                    "tipo_servicio_id": int(r["tipo_servicio_id"]),
-                    "complejidad": int(r["complejidad"]),
-                    "cantidad_unidades": cant,
-                    "horas_estimadas": cant,
-                    "urgencia_dias": int(r["urgencia_dias"]),
-                    "incluye_adicional": inc,
-                    "incluye_mantenimiento": inc,
-                    "costo_base": base,
-                    "costo_base_cop": base,
-                    "costo_total": total,
-                    "costo_total_cop": total,
-                    "margen_estimado": float(r["margen_estimado"]),
-                }
-            )
-        return pd.DataFrame(registros)
+        return _mapear_tarifas_df(self._get("tarifas_historicas"))
 
     def obtener_historico_ofertas(self) -> pd.DataFrame:
         return pd.DataFrame(self._get("historico_ofertas"))
 
     def obtener_bloques_agenda(self) -> Dict[str, Dict[str, Any]]:
-        filas = self._get("agenda_bloques", {"order": "fecha_hora.asc"})
-        return {
-            str(r["fecha_hora"]): {"estado": str(r["estado"]), "cliente": r.get("cliente")}
-            for r in filas
-        }
+        return _mapear_bloques(self._get("agenda_bloques", {"order": "fecha_hora.asc"}))
 
     def guardar_bloque_agenda(
         self, fecha_hora: str, estado: str, cliente: Optional[str] = None
@@ -781,32 +720,7 @@ class RepositorioSupabase(RepositorioEntorno):
         )
 
     def listar_perfiles_clientes(self) -> Dict[str, Dict[str, Any]]:
-        filas = self._get("perfiles_clientes")
-        res: Dict[str, Dict[str, Any]] = {}
-        for r in filas:
-            hist = r.get("historial_interacciones")
-            if isinstance(hist, str):
-                hist = json.loads(hist)
-            parcial = r.get("parametros_parciales")
-            if isinstance(parcial, str):
-                parcial = json.loads(parcial)
-            res[str(r["id_cliente"])] = {
-                "id_cliente": str(r["id_cliente"]),
-                "nombre": str(r["nombre"]),
-                "canal": str(r["canal"]),
-                "historial_interacciones": hist or [],
-                "tono_actual": str(r.get("tono_actual", "neutral")),
-                "fidelidad": int(r.get("fidelidad", 1)),
-                "ultima_cotizacion": r.get("ultima_cotizacion"),
-                "ultima_complejidad": int(r.get("ultima_complejidad", 3)),
-                "parametros_parciales": parcial or {},
-                "esperando_parametros_cotizacion": bool(
-                    r.get("esperando_parametros_cotizacion", False)
-                ),
-                "promocion_aplicada": r.get("promocion_aplicada"),
-                "automatizacion_activa": bool(r.get("automatizacion_activa", True)),
-            }
-        return res
+        return _mapear_perfiles(self._get("perfiles_clientes"))
 
     def guardar_perfil_cliente(self, perfil: Dict[str, Any]) -> None:
         self._upsert(
@@ -832,20 +746,7 @@ class RepositorioSupabase(RepositorioEntorno):
         )
 
     def listar_alertas_humanas(self) -> List[Dict[str, Any]]:
-        filas = self._get("alertas_humanas", {"order": "id.asc"})
-        return [
-            {
-                "timestamp": str(r["timestamp"]),
-                "id_cliente": str(r["id_cliente"]),
-                "nombre": str(r["nombre"]),
-                "canal": str(r["canal"]),
-                "motivo_critico": str(r["motivo_critico"]),
-                "historial_charla": r.get("historial_charla") or [],
-                "estado": str(r["estado"]),
-                "resuelta": bool(r.get("resuelta", False)),
-            }
-            for r in filas
-        ]
+        return _mapear_alertas(self._get("alertas_humanas", {"order": "id.asc"}))
 
     def registrar_alerta_humana(self, alerta: Dict[str, Any]) -> None:
         headers = {**self.headers, "Prefer": "return=minimal"}
