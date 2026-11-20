@@ -1,0 +1,133 @@
+@startuml
+title SEQ: CICLO INTEGRAL DE COTIZACION Y NEGOCIACION (Interacción de los 5 Agentes)
+
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam boxPadding 10
+skinparam participantPadding 10
+skinparam roundcorner 5
+skinparam sequenceGroupBorderColor #4A708B
+skinparam sequenceGroupBackgroundColor #FAFAFA
+
+autonumber 1 "<b>[00]</b>"
+
+box "Entorno Operativo" #F4F6F9
+    participant "EntornoVirtualAtencion\n<<environment>>" as Entorno #E8EDF2
+end box
+
+box "Organización SistemaMultiagenteComercial" #F9FBFD
+    participant "AgenteVentas\n<<agent: EjecutivoVentas>>" as Ventas #D4EDDA
+    participant "AgenteCoordinador\n<<agent: Coordinador>>" as Coord #FFF3CD
+    participant "AgenteCotizaciones\n<<agent: LiquidadorCotizaciones>>" as Cotiz #CCE5FF
+    participant "AgentePromociones\n<<agent: AnalistaPromociones>>" as Promo #FFF0F5
+    participant "AgenteAgendamientos\n<<agent: GestorAgenda>>" as Agenda #E2E3E5
+end box
+
+== FASE 1: Recepción de Solicitud y Evaluación de Viabilidad ==
+Entorno -> Ventas: eventoLlegadaMensaje(solicitud_cotizacion)
+activate Ventas
+Ventas -> Ventas: interpretarLenguajeNatural()\n[ML: TF-IDF + LogisticRegression]
+Ventas -> Coord: REQUEST (solicitar_cotizacion_servicio parametros_servicio)\n<<ACL:REQUEST>>
+activate Coord
+note over Coord
+  Ajuste Juan Puello:
+  No es 'escalar', es una solicitud de servicio
+  donde el Coordinador evalúa y decide qué hacer.
+end note
+Coord -> Coord: evaluarSolicitudVenta()\n[Verificar alcance y viabilidad operativa]
+Coord --> Ventas: AGREE (solicitar_cotizacion_servicio)\n<<ACL:AGREE>>
+
+Coord -> Cotiz: REQUEST (calcular_costo parametros_servicio)\n<<ACL:REQUEST>>
+activate Cotiz
+Cotiz --> Coord: AGREE (calcular_costo parametros_servicio)\n<<ACL:AGREE>>
+
+== FASE 2: Liquidación de Costos y Validación de Parámetros ==
+alt Parámetros incompletos (Faltan horas o nivel de complejidad)
+    Cotiz -> Coord: FAILURE (motivo: parametros_incompletos)\n<<ACL:FAILURE>>
+    Coord -> Ventas: REQUEST (solicitar_parametros_faltantes)\n<<ACL:REQUEST>>
+    Ventas -> Entorno: responderLenguajeNatural(pregunta_aclaratoria_parametros)
+else Parámetros completos (Cálculo predictivo exitoso)
+    Cotiz -> Entorno: consultarTarifasHistoricas(tipo_servicio)
+    Entorno --> Cotiz: datos(tarifas_historicas, factores_complejidad)
+    Cotiz -> Cotiz: ejecutarCalculoCostos()\n[ML: RandomForestRegressor R2=0.99]
+    Cotiz -> Coord: INFORM (cotizacion_calculada valor_total desglose)\n<<ACL:INFORM>>
+    deactivate Cotiz
+    
+    Coord -> Coord: validarPropuestaComercial()
+    Coord -> Ventas: INFORM (entregar_cotizacion_formal valor_total desglose)\n<<ACL:INFORM>>
+    deactivate Coord
+    
+    Ventas -> Entorno: responderLenguajeNatural(cotizacion_formal)
+    deactivate Ventas
+
+    == FASE 3: Respuestas del Cliente y Cierre de Ciclo Comercial ==
+    alt Alternativa A: Cliente acepta cotización y solicita agendar cita
+        Entorno -> Ventas: eventoLlegadaMensaje(aceptar_cotizacion, fecha_hora_deseada)
+        activate Ventas
+        Ventas -> Ventas: interpretarLenguajeNatural()\n[Intención: solicitud_agendamiento]
+        Ventas -> Coord: REQUEST (solicitar_agendamiento fecha_hora cliente)\n<<ACL:REQUEST>>
+        activate Coord
+        Coord -> Agenda: QUERY-IF (disponible_bloque fecha_hora cotizacion_aprobada)\n<<ACL:QUERY-IF>>
+        activate Agenda
+        Agenda -> Entorno: consultarDisponibilidadGoogleCalendar(fecha_hora)
+        Entorno --> Agenda: respuesta(estado_bloque)
+        
+        alt Horario disponible en Google Calendar
+            Agenda -> Coord: INFORM (disponible_bloque true)\n<<ACL:INFORM>>
+            Coord -> Agenda: REQUEST (registrar_cita cliente fecha_hora)\n<<ACL:REQUEST>>
+            Agenda -> Entorno: crearEventoGoogleCalendar(cita_confirmada)
+            Entorno --> Agenda: ok(evento_creado_id)
+            Agenda -> Coord: CONFIRM (cita_registrada fecha_hora)\n<<ACL:CONFIRM>>
+            Coord -> Ventas: INFORM (reserva_confirmada fecha_hora)\n<<ACL:INFORM>>
+            Ventas -> Entorno: responderLenguajeNatural(confirmacion_cita_exitosa)
+        else Superposición horaria detectada (Bloque ocupado)
+            Agenda -> Coord: INFORM (disponible_bloque false)\n<<ACL:INFORM>>
+            Agenda -> Coord: PROPOSE (horarios_alternativos bloque_1 bloque_2)\n<<ACL:PROPOSE>>
+            deactivate Agenda
+            Coord -> Ventas: INFORM (ofrecer_alternativas_agenda)\n<<ACL:INFORM>>
+            Ventas -> Entorno: responderLenguajeNatural(sugerir_horarios_alternativos)
+        end
+        deactivate Coord
+        deactivate Ventas
+
+    else Alternativa B: Cliente objeta precio y solicita descuento
+        Entorno -> Ventas: eventoLlegadaMensaje(objecion_precio_solicitud_rebaja)
+        activate Ventas
+        Ventas -> Ventas: interpretarLenguajeNatural()\n[Tono: indeciso | Nivel Indecisión: 0.72]
+        Ventas -> Coord: REQUEST (evaluar_incentivo nivel_indecision_alto)\n<<ACL:REQUEST>>
+        activate Coord
+        Coord -> Promo: REQUEST (calcular_descuento cotizacion_actual nivel_indecision)\n<<ACL:REQUEST>>
+        activate Promo
+        Promo -> Entorno: consultarHistoricoOfertasYMargenes(cliente_id)
+        Entorno --> Promo: datos(margen_minimo, historico_ofertas)
+        Promo -> Promo: calcularMargenDescuento()\n[ML: KNeighborsRegressor R2=0.94]
+        Promo -> Coord: PROPOSE (aplicar_descuento 10_porciento nuevo_monto)\n<<ACL:PROPOSE>>
+        deactivate Promo
+        
+        alt Descuento viable (Respeta margen mínimo de rentabilidad)
+            Coord -> Promo: ACCEPT-PROPOSAL (aprobar_descuento 10_porciento)\n<<ACL:ACCEPT-PROPOSAL>>
+            Coord -> Ventas: INFORM (transferir_promocion 10_porciento nuevo_monto)\n<<ACL:INFORM>>
+            Ventas -> Entorno: responderLenguajeNatural(presentar_oferta_con_descuento)
+            note over Ventas, Entorno: El cliente puede aceptar y proceder a agendar cita
+        else Descuento inviable (Compromete rentabilidad del negocio)
+            Coord -> Promo: REJECT-PROPOSAL (motivo: excede_margen_permitido)\n<<ACL:REJECT-PROPOSAL>>
+            Coord -> Ventas: REFUSE (motivo: descuento_no_viable)\n<<ACL:REFUSE>>
+            Ventas -> Entorno: responderLenguajeNatural(mantener_tarifa_base_y_beneficios)
+        end
+        deactivate Coord
+        deactivate Ventas
+
+    else Alternativa C: Cliente declina oferta y rechaza la compra
+        Entorno -> Ventas: eventoLlegadaMensaje(rechazo_compra_no_interesado)
+        activate Ventas
+        Ventas -> Ventas: interpretarLenguajeNatural()\n[Intención: rechazo_compra]
+        Ventas -> Coord: INFORM (cliente_declina_oferta motivo: excede_presupuesto)\n<<ACL:INFORM>>
+        activate Coord
+        Coord -> Coord: cerrarOportunidadVenta(estado=descartada)
+        Coord -> Ventas: INFORM (confirmar_cierre_conversacion)\n<<ACL:INFORM>>
+        deactivate Coord
+        Ventas -> Entorno: responderLenguajeNatural(despedida_cordial_y_registro)
+        deactivate Ventas
+    end
+end
+@enduml
