@@ -275,12 +275,31 @@ class AgenteVentas(AgenteBaseMASML):
             )
             return
 
+        # Alternativa C: Cliente declina oferta y rechaza la compra
+        if (
+            tipo_evento in {"rechazo_compra", "rechazo_compra_no_interesado"}
+            or analisis["intencion"] == "rechazo_compra"
+        ):
+            await self.escalarCasoACoordinador(
+                comportamiento=comportamiento,
+                performativa="INFORM",
+                predicado="(cliente_declina_oferta motivo: excede_presupuesto)",
+                protocolo="FIPA-Request",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "canal": canal,
+                    "motivo_rechazo": texto or "excede_presupuesto",
+                },
+            )
+            return
+
         # Si el cliente venia de parametros incompletos y responde con datos faltantes
         parametros_extraidos = dict(analisis.get("parametros_extraidos", {}))
         esperando_params = bool(perfil.get("esperando_parametros_cotizacion", False))
         tiene_nuevos_params = any(
             k in parametros_extraidos
-            for k in ("tipo_servicio", "horas_estimadas", "complejidad", "urgencia_dias")
+            for k in ("tipo_servicio", "cantidad_unidades", "horas_estimadas", "complejidad", "urgencia_dias")
         )
 
         # Paso 2 (Cotizacion): Solicitud de cotizacion o respuesta aclaratoria con parametros
@@ -295,18 +314,32 @@ class AgenteVentas(AgenteBaseMASML):
                 **parametros_extraidos,
                 **dict(payload_evt.get("parametros_servicio", {})),
             }
-            await self.escalarCasoACoordinador(
-                comportamiento=comportamiento,
-                performativa="REQUEST",
-                predicado="(escalar_caso cotizacion parametros_servicio)",
-                protocolo="FIPA-Request",
-                conversation_id=conversation_id,
-                payload_extra={
-                    "id_cliente": id_cliente,
-                    "canal": canal,
-                    "parametros_servicio": params,
-                },
-            )
+            if esperando_params and tiene_nuevos_params:
+                await self.escalarCasoACoordinador(
+                    comportamiento=comportamiento,
+                    performativa="INFORM",
+                    predicado="(parametros_completados parametros_servicio)",
+                    protocolo="FIPA-Request",
+                    conversation_id=conversation_id,
+                    payload_extra={
+                        "id_cliente": id_cliente,
+                        "canal": canal,
+                        "parametros_servicio": params,
+                    },
+                )
+            else:
+                await self.escalarCasoACoordinador(
+                    comportamiento=comportamiento,
+                    performativa="REQUEST",
+                    predicado="(solicitar_cotizacion_servicio parametros_servicio)",
+                    protocolo="FIPA-Request",
+                    conversation_id=conversation_id,
+                    payload_extra={
+                        "id_cliente": id_cliente,
+                        "canal": canal,
+                        "parametros_servicio": params,
+                    },
+                )
             return
 
         # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual
@@ -375,7 +408,7 @@ class AgenteVentas(AgenteBaseMASML):
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
                 performativa="REQUEST",
-                predicado="(escalar_caso agendamiento fecha_hora)",
+                predicado="(solicitar_agendamiento fecha_hora cliente)",
                 protocolo="FIPA-Query",
                 conversation_id=conversation_id,
                 payload_extra={
@@ -485,6 +518,30 @@ class AgenteVentas(AgenteBaseMASML):
             res = self.responderLenguajeNatural("sugerir_horarios_alternativos", canal, id_cliente, texto_alt)
             self.marcar_ciclo_completado(
                 {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res}
+            )
+
+        elif perf == "REFUSE" and "fuera_de_alcance_operativo" in contenido:
+            texto_no_viable = (
+                "En este momento esa solicitud se encuentra fuera de nuestro alcance operativo. "
+                "Si deseas consultar otros servicios de nuestro catalogo, con gusto te atiendo."
+            )
+            res = self.responderLenguajeNatural("solicitud_no_viable_cierre", canal, id_cliente, texto_no_viable)
+            self.marcar_ciclo_completado(
+                {
+                    "resultado": "solicitud_no_viable",
+                    "motivo": payload.get("motivo", "fuera_de_alcance_operativo"),
+                    "envio": res,
+                }
+            )
+
+        elif perf == "INFORM" and "confirmar_cierre_conversacion" in contenido:
+            texto_despedida = (
+                "Entendido, registramos el cierre de tu solicitud. "
+                "Muchas gracias por tu tiempo y quedamos atentos si mas adelante necesitas nuestros servicios."
+            )
+            res = self.responderLenguajeNatural("despedida_cordial_y_registro", canal, id_cliente, texto_despedida)
+            self.marcar_ciclo_completado(
+                {"resultado": "oportunidad_descartada", "envio": res}
             )
 
         elif perf == "CANCEL" and "cancelar_accion" in contenido:

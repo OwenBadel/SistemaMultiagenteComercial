@@ -134,12 +134,18 @@ def test_modelos_sklearn_y_datasets() -> None:
     assert nlp_coloquial["intencion"] == "consulta_servicio"
     assert nlp_coloquial["tono_cliente"] == "interesado"
 
+    nlp_rechazo = modelo_nlp.analizar_mensaje("No voy a comprar, gracias, excede mi presupuesto")
+    assert nlp_rechazo["intencion"] == "rechazo_compra"
+    assert nlp_rechazo["tono_cliente"] == "indeciso"
+
 
 def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
     """
     Demuestra Escenario 1 (FIPA-Request) completo desde Botpress:
-    1) Solicitud incompleta -> else [FAILURE parametros_incompletos -> REQUEST aclaracion]
-    2) Respuesta con horas y complejidad -> alt [INFORM cotizacion_calculada -> INFORM entregar_cotizacion]
+    1) Solicitud incompleta -> loop [FAILURE parametros_incompletos -> REQUEST aclaracion]
+    2) Respuesta con horas y complejidad -> INFORM parametros_completados -> INFORM cotizacion_calculada -> INFORM entregar_cotizacion_formal
+    3) Cotizacion directa en un turno -> REQUEST -> AGREE -> REQUEST -> AGREE -> INFORM -> INFORM
+    4) Solicitud fuera de alcance operativo -> REQUEST -> REFUSE (fuera_de_alcance_operativo)
     """
 
     async def _run() -> None:
@@ -175,10 +181,30 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
                 texto="Son 45 horas estimadas y complejidad 3",
             )
             perfs_1a = _extraer_performativas(res_completa["mensajes_fipa_turno"])
-            assert perfs_1a == ["REQUEST", "AGREE", "REQUEST", "AGREE", "INFORM", "INFORM"]
+            assert perfs_1a == ["INFORM", "INFORM", "INFORM", "INFORM"]
             assert res_completa["resultado"]["resultado"] == "cotizacion_entregada"
             assert res_completa["resultado"]["valor_total"] > 0
             assert "$" in res_completa["respuesta"]
+
+            res_directa = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="573001119900",
+                nombre_cliente="Julian Perez",
+                texto="Quiero cotizar una automatizacion_ia de 50 horas complejidad 4",
+            )
+            perfs_directa = _extraer_performativas(res_directa["mensajes_fipa_turno"])
+            assert perfs_directa == ["REQUEST", "AGREE", "REQUEST", "AGREE", "INFORM", "INFORM"]
+            assert res_directa["resultado"]["resultado"] == "cotizacion_entregada"
+
+            res_no_viable = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="573001117766",
+                nombre_cliente="Mario Diaz",
+                texto="Quiero cotizar un servicio de plomeria de 20 horas",
+            )
+            perfs_no_viable = _extraer_performativas(res_no_viable["mensajes_fipa_turno"])
+            assert perfs_no_viable == ["REQUEST", "REFUSE"]
+            assert res_no_viable["resultado"]["resultado"] == "solicitud_no_viable"
         finally:
             await servicio.detener()
 
@@ -187,9 +213,10 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
 
 def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
     """
-    Demuestra Escenario 2 (FIPA-Propose) en canal Webchat:
-    - alt [acepta]: PROPOSE -> ACCEPT-PROPOSAL -> INFORM -> promocion presentada
-    - else [rechaza]: PROPOSE -> REJECT-PROPOSAL -> REFUSE -> tarifa base mantenida
+    Demuestra Escenario 2 (FIPA-Propose) en canal Webchat y Alternativa C (Rechazo):
+    - alt [acepta]: REQUEST -> REQUEST -> AGREE -> PROPOSE -> ACCEPT-PROPOSAL -> INFORM -> INFORM
+    - else [rechaza]: REQUEST -> REQUEST -> AGREE -> PROPOSE -> REJECT-PROPOSAL -> REFUSE
+    - alt C [declina compra]: INFORM -> INFORM -> oportunidad_descartada
     """
 
     async def _run() -> None:
@@ -217,6 +244,7 @@ def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
             assert perfs_2a == [
                 "REQUEST",
                 "REQUEST",
+                "AGREE",
                 "PROPOSE",
                 "ACCEPT-PROPOSAL",
                 "INFORM",
@@ -234,11 +262,26 @@ def test_secuencia_2_negociacion_aceptada_y_rechazada() -> None:
             assert perfs_2b == [
                 "REQUEST",
                 "REQUEST",
+                "AGREE",
                 "PROPOSE",
                 "REJECT-PROPOSAL",
                 "REFUSE",
             ]
             assert res_2b["resultado"]["resultado"] == "descuento_rechazado"
+
+            res_2c = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="web_user_88",
+                nombre_cliente="Carlos Ruiz",
+                texto="No voy a comprar, gracias, excede mi presupuesto",
+            )
+            perfs_2c = _extraer_performativas(res_2c["mensajes_fipa_turno"])
+            assert perfs_2c == ["INFORM", "INFORM"]
+            assert res_2c["resultado"]["resultado"] == "oportunidad_descartada"
+            assert (
+                servicio.entorno.perfilesClientes.perfiles["web_user_88"].get("estado_oportunidad")
+                == "descartada"
+            )
         finally:
             await servicio.detener()
 

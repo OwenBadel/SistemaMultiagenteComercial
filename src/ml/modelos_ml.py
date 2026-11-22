@@ -87,6 +87,13 @@ class ModeloNLPVentas:
             "porqueria", "porquería", "denunciar", "furioso", "inaceptable",
             "humano ya", "bot inutil", "bot inútil", "reclamo", "reclamar",
         )
+        palabras_rechazo = (
+            "no voy a comprar", "no me interesa", "declino",
+            "cancelar la solicitud", "cancela la solicitud", "cancelo la solicitud",
+            "no lo voy a tomar", "mejor no", "desisto",
+            "rechazo la cotizacion", "rechazo la cotización", "rechazo la oferta",
+            "no quiero continuar", "mejor lo dejo asi", "mejor lo dejo así",
+        )
         palabras_agenda = (
             "agendar", "agenda", "cita", "reservar", "horario", "fecha",
             "reunion", "reunión", "calendario", "apartar",
@@ -115,6 +122,12 @@ class ModeloNLPVentas:
             intencion = "reclamo_critico"
             tono = "hostil"
             nivel_indecision = 0.90
+        elif contexto_tipo in {"rechazo_compra", "rechazo_compra_no_interesado"} or any(
+            p in texto_norm for p in palabras_rechazo
+        ):
+            intencion = "rechazo_compra"
+            tono = "indeciso"
+            nivel_indecision = 0.85
         elif contexto_tipo in {"aceptar_cotizacion", "solicitud_agendamiento"} or any(
             p in texto_norm for p in palabras_agenda
         ):
@@ -136,7 +149,13 @@ class ModeloNLPVentas:
         elif contexto_tipo == "parametros_servicio" or (
             any(
                 k in parametros
-                for k in ("tipo_servicio", "cantidad_unidades", "horas_estimadas", "complejidad")
+                for k in (
+                    "tipo_servicio",
+                    "cantidad_unidades",
+                    "horas_estimadas",
+                    "complejidad",
+                    "fuera_de_alcance",
+                )
             )
             and any(
                 w in texto_norm
@@ -182,7 +201,15 @@ class ModeloNLPVentas:
                 params["tipo_servicio"] = clave_servicio
                 break
             palabras = [str(p).lower() for p in meta.get("palabras_clave", [])]
-            if any(p and p in texto_norm for p in palabras):
+            if any(
+                p
+                and (
+                    bool(re.search(rf"\b{re.escape(p)}\b", texto_norm))
+                    if len(p) < 4
+                    else p in texto_norm
+                )
+                for p in palabras
+            ):
                 params["tipo_servicio"] = clave_servicio
                 break
             if nombre_norm and any(
@@ -230,6 +257,14 @@ class ModeloNLPVentas:
         match_fecha = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", texto_norm)
         if match_fecha:
             params["fecha_hora"] = match_fecha.group(1)
+
+        rubros_ajenos = (
+            "plomeria", "plomería", "carpinteria", "carpintería",
+            "construccion", "construcción", "mecanica", "mecánica",
+            "cirugia", "cirugía",
+        )
+        if "tipo_servicio" not in params and any(r in texto_norm for r in rubros_ajenos):
+            params["fuera_de_alcance"] = True
 
         return params
 

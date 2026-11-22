@@ -96,6 +96,13 @@ CORPUS_NLP_VENTAS: List[Tuple[str, str, str]] = [
     ("No quiero hablar con ningún bot inútil, exijo atención humana urgente", "reclamo_critico", "hostil"),
     ("Qué porquería de atención, me tienen harto con respuestas automáticas", "reclamo_critico", "hostil"),
     ("Estoy furioso por el error en mi factura, solucionen esto o cancelo", "reclamo_critico", "hostil"),
+    ("No voy a comprar, gracias por la información", "rechazo_compra", "indeciso"),
+    ("Gracias, no me interesa continuar con la cotización", "rechazo_compra", "indeciso"),
+    ("Rechazo la oferta, excede mi presupuesto y no lo voy a tomar", "rechazo_compra", "indeciso"),
+    ("Mejor lo dejo así, cancelo la solicitud", "rechazo_compra", "indeciso"),
+    ("Declino la propuesta, no deseo seguir adelante", "rechazo_compra", "indeciso"),
+    ("No quiero continuar con el servicio, gracias", "rechazo_compra", "indeciso"),
+    ("Por ahora desisto de la compra", "rechazo_compra", "indeciso"),
 ]
 
 
