@@ -212,12 +212,15 @@ class GeneradorDialogoGemini:
             else:
                 with httpx.Client(timeout=self.timeout_segundos) as cliente:
                     resp = cliente.post(url, headers=headers, json=cuerpo)
+                    if resp.status_code in {429, 503} and self.modelo != "gemini-3.1-flash-lite-preview":
+                        url_respaldo = f"{_URL_BASE_GEMINI}/gemini-3.1-flash-lite-preview:generateContent"
+                        resp = cliente.post(url_respaldo, headers=headers, json=cuerpo)
         except (httpx.TimeoutException, httpx.HTTPError, OSError) as exc:
-            self._activar_enfriamiento(30.0, f"error_red:{type(exc).__name__}")
+            self._activar_enfriamiento(15.0, f"error_red:{type(exc).__name__}")
             return texto_base
 
         if resp.status_code == 429:
-            self._activar_enfriamiento(120.0, "cuota_o_tokens_agotados_429")
+            self._activar_enfriamiento(20.0, "cuota_o_tokens_agotados_429")
             return texto_base
         if resp.status_code in {401, 403}:
             self._activar_enfriamiento(600.0, f"api_key_invalida_{resp.status_code}")
