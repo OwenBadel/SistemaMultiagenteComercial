@@ -640,7 +640,11 @@ class ModeloNLPVentas:
             tono = "interesado"
             nivel_indecision = 0.12
             confianza_reglas = 1.0
-        elif contexto_tipo == "parametros_servicio" or (
+        elif (
+            contexto_tipo == "parametros_servicio"
+            or "cotiz" in texto_norm
+            or "presupuesto" in texto_norm
+            or (
             any(
                 k in parametros
                 for k in (
@@ -661,7 +665,7 @@ class ModeloNLPVentas:
                     "producto", "complejidad", "cuanto",
                 )
             )
-        ):
+        )):
             intencion = "solicitud_cotizacion"
             tono = "interesado"
             nivel_indecision = 0.20
