@@ -186,6 +186,7 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
         }
 
     @app.post("/api/botpress/mensaje")
+    @app.post("/api/botpress/mensaje/api/botpress/mensaje")
     async def procesar_mensaje_botpress(
         req: PeticionMensajeBotpress,
         x_api_key: Optional[str] = Header(default=None),
