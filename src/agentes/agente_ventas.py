@@ -294,14 +294,47 @@ class AgenteVentas(AgenteBaseMASML):
             + "\n".join(lineas)
             + f"\nCuéntame qué servicio te interesa y aproximadamente cuántas {unidad} estás planeando para prepararte una cotización."
         )
-        hechos_catalogo = [unidad] + [
-            str(meta.get("nombre", clave)) for clave, meta in catalogo.items()
-        ]
+        ultimo_msg = (
+            str(self.creencias["mensajesEntrantes"][-1]).casefold()
+            if self.creencias.get("mensajesEntrantes")
+            else ""
+        )
+        ya_vio_catalogo = any(
+            t.get("rol") == "agente_ventas"
+            for t in self.creencias.get("historialCharla", [])
+        )
+        pide_algo_especifico_o_no_esta = any(
+            p in ultimo_msg
+            for p in ("no esta", "no está", "ninguno", "otra cosa", "familiar", "familia", "boda", "quince")
+        )
+        if (
+            self.generador_llm is not None
+            and self.generador_llm.activo
+            and (ya_vio_catalogo or pide_algo_especifico_o_no_esta)
+        ):
+            tipo_nlg = "seguimiento_consulta_especifica"
+            hechos_catalogo: list[str] = []
+            texto_base_nlg = (
+                f"Referencia del portafolio disponible ({unidad}, {moneda}):\n"
+                + "\n".join(lineas)
+                + "\nEl cliente ya vio el catalogo o pregunta por una necesidad puntual. "
+                "Responde directamente a lo que escribio con empatia, sin repetir mecanicamente toda la lista, "
+                "y sugiere como adaptar alguno de nuestros servicios (o pregunta detalles para cotizarlo)."
+            )
+        else:
+            tipo_nlg = "catalogo_servicios"
+            hechos_catalogo = [unidad] + [
+                str(meta.get("nombre", clave)) for clave, meta in catalogo.items()
+            ]
+            texto_base_nlg = texto_base
+
         texto_catalogo = self._redactar_con_llm(
-            tipo_respuesta="catalogo_servicios",
-            texto_base=texto_base,
+            tipo_respuesta=tipo_nlg,
+            texto_base=texto_base_nlg,
             hechos_obligatorios=hechos_catalogo,
         )
+        if texto_catalogo == texto_base_nlg and tipo_nlg == "seguimiento_consulta_especifica":
+            texto_catalogo = texto_base
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": texto_catalogo}
         )
