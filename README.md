@@ -11,7 +11,7 @@ Cliente (WhatsApp / Webchat / Instagram / Messenger)
   -> Botpress (pasarela de canales y alertas salientes al dueno)
   -> POST /api/botpress/mensaje (FastAPI)
   -> ServicioMultiagenteComercial (5 agentes SPADE sobre XMPP embebido)
-       |-- EntornoVirtualAtencion <-> Supabase PostgreSQL (negocio, catalogo, ML, perfiles, alertas)
+       |-- EntornoVirtualAtencion <-> Supabase PostgreSQL (negocio, catalogo, ML, perfiles, citas y alertas)
        |-- EntornoVirtualAtencion <-> Google Calendar API v3 (disponibilidad y citas reales)
   <- JSON { respuesta, responder_al_cliente, pausado_humano, notificar_dueno, ... }
 ```
@@ -64,7 +64,13 @@ HOST=0.0.0.0
 PORT=8000
 ```
 
-*(Si no configuras `SUPABASE_URL` o `GOOGLE_CALENDAR_ID`, el proyecto usa respaldo local en SQLite/memoria para desarrollo y pruebas).*
+Las reservas se guardan en `public.agendamientos`. Sin Google Calendar configurado, la cita se persiste en Supabase con `registrado_en='solo_supabase'` y `google_calendar_estado='no_configurado'`. Si Google está configurado pero no se puede validar su disponibilidad, la solicitud queda persistida como `pendiente` y no se confirma al cliente. Si Google valida el horario pero falla al crear el evento, se confirma solo después de guardar la cita en Supabase y queda registrada con `google_calendar_estado='error'`.
+
+Si no configuras `SUPABASE_URL` y `SUPABASE_KEY`, el proyecto usa SQLite local persistente para desarrollo. En ese modo, las citas se conservan en SQLite; para producción y almacenamiento en `public.agendamientos`, configura Supabase.
+
+Al solicitar una cita se entienden fechas relativas como “hoy”, “mañana”, “pasado mañana”, “ayer” y “en/dentro de N días”, calculadas en `America/Bogota`. Si solo se indica el día, se propone las 10:00 a. m.; las fechas relativas pasadas no se reservan y se solicita una fecha futura. Si no se reconoce ninguna fecha, el agente pide aclaración en vez de asignar una fecha por defecto.
+
+Si Google Calendar crea un evento, pero Supabase no puede confirmar el estado sincronizado, la cita queda pendiente con el identificador del evento para reconciliación manual; el agente no confirma al cliente ni elimina automáticamente el evento. Las citas pendientes bloquean el horario, así que no se debe reintentar la sincronización hasta revisar el registro y ese ID en ambas fuentes. Si tampoco se puede guardar el marcador de recuperación en Supabase, el ID del evento se deja en el log para revisión manual.
 
 ---
 

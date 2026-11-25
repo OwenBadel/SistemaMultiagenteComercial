@@ -23,6 +23,7 @@ from src.comunicacion.fipa_acl import extraer_payload_fipa
 from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.reglas_comerciales import promocion_elegible
 
 
 @dataclass
@@ -112,50 +113,6 @@ class AgenteCoordinador(AgenteBaseMASML):
     # ------------------------------------------------------------------
     # ACCIONES DEL DIAGRAMA DE CLASES MAS-ML
     # ------------------------------------------------------------------
-    def evaluarSolicitudVenta(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Evalua alcance y viabilidad operativa de la solicitud de venta."""
-        parametros = dict(payload.get("parametros_servicio", {}))
-        cantidad = int(
-            parametros.get("cantidad_unidades")
-            or parametros.get("horas_estimadas")
-            or 0
-        )
-        fuera_alcance = bool(parametros.get("fuera_de_alcance", False))
-        viable = (not fuera_alcance) and (cantidad <= 500)
-        motivo = "viable" if viable else "fuera_de_alcance_operativo"
-        self.registrar_accion(
-            "evaluarSolicitudVenta()",
-            f"viable={viable} | motivo={motivo}",
-        )
-        return {"viable": viable, "motivo": motivo}
-
-    def validarPropuestaComercial(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Valida la propuesta comercial liquidada antes de autorizar su entrega."""
-        valor_total = float(payload.get("valor_total", 0.0))
-        self.registrar_accion(
-            "validarPropuestaComercial()",
-            f"valor_total={valor_total:,.0f}",
-        )
-        return {"valida": valor_total >= 0.0, "valor_total": valor_total}
-
-    def cerrarOportunidadVenta(
-        self, id_cliente: str, motivo: str, estado: str = "descartada"
-    ) -> Dict[str, Any]:
-        """Registra el cierre de oportunidad cuando el cliente declina la oferta."""
-        self.registrar_accion(
-            f"cerrarOportunidadVenta(estado={estado})",
-            f"cliente={id_cliente} | motivo={motivo}",
-        )
-        self.entorno.perfilesClientes.actualizar_perfil(
-            id_cliente,
-            parametros_parciales={},
-            esperando_parametros_cotizacion=False,
-            estado_oportunidad=estado,
-        )
-        cierre = {"id_cliente": id_cliente, "motivo": motivo, "estado": estado}
-        self.creencias["ultimoCierreOportunidad"] = cierre
-        return cierre
-
     async def enrutarPeticion(
         self,
         comportamiento: CyclicBehaviour,
@@ -176,30 +133,13 @@ class AgenteCoordinador(AgenteBaseMASML):
         if tipo_peticion == "cotizacion":
             if not self.organizacion.verificar_control("Coordinador", "LiquidadorCotizaciones"):
                 raise PermissionError("Relación <<control>> inválida sobre LiquidadorCotizaciones")
-            eval_venta = self.evaluarSolicitudVenta(payload)
-            if not eval_venta["viable"]:
-                await self.enviar_fipa(
-                    comportamiento,
-                    JID_VENTAS,
-                    "REFUSE",
-                    "(motivo: fuera_de_alcance_operativo)",
-                    protocolo="FIPA-Request",
-                    conversation_id=conversation_id,
-                    payload_extra={
-                        "id_cliente": payload.get("id_cliente", "cliente_001"),
-                        "canal": payload.get("canal", "WhatsApp"),
-                        "motivo": eval_venta["motivo"],
-                    },
-                )
-                return
-
             self.registrar_accion("enrutarPeticion()", "caso=cotizacion -> AgenteCotizaciones")
 
             await self.enviar_fipa(
                 comportamiento,
                 JID_VENTAS,
                 "AGREE",
-                "(solicitar_cotizacion_servicio)",
+                "(escalar_caso cotizacion)",
                 protocolo="FIPA-Request",
                 conversation_id=conversation_id,
                 payload_extra={"id_cliente": payload.get("id_cliente", "cliente_001")},
@@ -225,9 +165,13 @@ class AgenteCoordinador(AgenteBaseMASML):
         elif tipo_peticion == "agendamiento":
             if not self.organizacion.verificar_control("Coordinador", "GestorAgenda"):
                 raise PermissionError("Relación <<control>> inválida sobre GestorAgenda")
-            cotizacion_aprobada = bool(
-                payload.get("cotizacion_aprobada")
-                or self.creencias.get("cotizacionCalculada") is not None
+            id_cliente = str(payload.get("id_cliente", "cliente_001"))
+            contexto_id = payload.get("contexto_conversacion_id")
+            cotizacion_aprobada = (
+                payload.get("cotizacion_aprobada") is True
+                and self.entorno.perfilesClientes.cotizacion_aprobada(
+                    id_cliente, str(contexto_id) if contexto_id else None
+                )
             )
             if not self.organizacion.validar_prerequisito_agendamiento(cotizacion_aprobada):
                 await self.enviar_fipa(
@@ -240,7 +184,7 @@ class AgenteCoordinador(AgenteBaseMASML):
                 )
                 return
 
-            fecha_hora = str(payload.get("fecha_hora", "2026-11-18 10:00"))
+            fecha_hora = str(payload.get("fecha_hora", "")).strip()
             self.registrar_accion(
                 "enrutarPeticion()", f"caso=agendamiento ({fecha_hora}) -> AgenteAgendamientos"
             )
@@ -254,9 +198,15 @@ class AgenteCoordinador(AgenteBaseMASML):
                 conversation_id=conversation_id,
                 payload_extra={
                     "fecha_hora": fecha_hora,
-                    "cotizacion_aprobada": True,
-                    "id_cliente": payload.get("id_cliente", "cliente_001"),
+                    "cotizacion_aprobada": cotizacion_aprobada,
+                    "id_cliente": id_cliente,
                     "nombre_cliente": payload.get("nombre_cliente", "Cliente Empresarial"),
+                    "canal": payload.get("canal", "WhatsApp"),
+                    "servicio": payload.get("servicio"),
+                    "contexto_conversacion_id": contexto_id,
+                    "alternativas_rechazadas": payload.get(
+                        "alternativas_rechazadas", []
+                    ),
                 },
             )
 
@@ -269,15 +219,39 @@ class AgenteCoordinador(AgenteBaseMASML):
         """Solicita al AgentePromociones calcular descuento óptimo cuidando margen."""
         if not self.organizacion.verificar_control("Coordinador", "AnalistaPromociones"):
             raise PermissionError("Relación <<control>> inválida sobre AnalistaPromociones")
+        id_cliente = str(payload.get("id_cliente", ""))
+        contexto_id = payload.get("contexto_conversacion_id")
+        try:
+            cotizacion_actual = float(payload.get("cotizacion_actual"))
+        except (TypeError, ValueError):
+            cotizacion_actual = 0.0
+        codigo = str(payload.get("promocion_codigo", "")).strip()
+        if (
+            cotizacion_actual <= 0
+            or not self.entorno.perfilesClientes.tiene_cotizacion(
+                id_cliente, str(contexto_id) if contexto_id else None
+            )
+            or not codigo
+        ):
+            await self.enviar_fipa(
+                comportamiento,
+                JID_VENTAS,
+                "REFUSE",
+                "(motivo: descuento_no_viable_sin_cotizacion_o_promocion)",
+                protocolo="FIPA-Propose",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "canal": payload.get("canal", "WhatsApp"),
+                    "contexto_conversacion_id": contexto_id,
+                },
+            )
+            return
         self.registrar_accion(
             "solicitarEvaluacionPromo()",
             f"indecision={payload.get('nivel_indecision', 0.72)}",
         )
         self.creencias["estadoAgentes"]["AgentePromociones"] = "ocupado"
-        cotizacion_actual = float(
-            payload.get("cotizacion_actual")
-            or (self.creencias.get("cotizacionCalculada") or {}).get("valor_total", 4_500_000.0)
-        )
         await self.enviar_fipa(
             comportamiento,
             JID_PROMOCIONES,
@@ -292,7 +266,10 @@ class AgenteCoordinador(AgenteBaseMASML):
         )
 
     def evaluar_utilidad_propuesta_promo(
-        self, descuento_porciento: float, cotizacion_actual: float
+        self,
+        descuento_porciento: float,
+        cotizacion_actual: float,
+        descuento_maximo_autorizado: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Función de utilidad racional del AgenteCoordinador:
@@ -302,7 +279,12 @@ class AgenteCoordinador(AgenteBaseMASML):
         bd = self.entorno.tarifasYMargenes
         margen_base = bd.margen_base_estimado
         margen_minimo = bd.margen_minimo_ganancia
-        descuento_maximo = bd.descuento_maximo_permitido
+        descuento_maximo = min(
+            bd.descuento_maximo_permitido,
+            descuento_maximo_autorizado
+            if descuento_maximo_autorizado is not None
+            else bd.descuento_maximo_permitido,
+        )
 
         factor_precio = max(0.05, 1.0 - (descuento_porciento / 100.0))
         nuevo_margen = (factor_precio - (1.0 - margen_base)) / factor_precio
@@ -354,7 +336,7 @@ class AgenteCoordinador(AgenteBaseMASML):
     def evaluarRiesgoYSuspenderSistema(self, motivo_critico: str) -> Dict[str, Any]:
         """Evalúa el riesgo crítico reportado por Ventas y prepara la pausa del sistema."""
         self.registrar_accion(
-            "evaluarRiesgoYSuspenderSistema()", f"riesgo=CRÍTICO ({motivo_critico})"
+            "evaluarRiesgoYSuspenderSistema()", "riesgo=CRITICO"
         )
         return {"riesgo": "alto", "suspender_automatizacion": True, "motivo": motivo_critico}
 
@@ -362,7 +344,7 @@ class AgenteCoordinador(AgenteBaseMASML):
         self, historial_charla: List[Dict[str, Any]], motivo_critico: str, id_cliente: str
     ) -> Dict[str, Any]:
         """Pausa la automatizacion y escala el control al profesional humano en el entorno."""
-        self.registrar_accion("pausarYAlertarHumano()", f"cliente={id_cliente}")
+        self.registrar_accion("pausarYAlertarHumano()")
         resultado = self.entorno.notificarAlertaHumana(
             historial_charla=historial_charla,
             motivo_critico=motivo_critico,
@@ -386,54 +368,12 @@ class AgenteCoordinador(AgenteBaseMASML):
 
         if emisor == "ventas":
             if perf == "REQUEST":
-                if (
-                    "solicitar_cotizacion_servicio" in contenido
-                    or "escalar_caso cotizacion" in contenido
-                ):
+                if "escalar_caso cotizacion" in contenido:
                     await self.enrutarPeticion(comportamiento, "cotizacion", payload, conv_id)
                 elif "evaluar_incentivo" in contenido:
                     await self.enrutarPeticion(comportamiento, "evaluar_incentivo", payload, conv_id)
-                elif (
-                    "solicitar_agendamiento" in contenido
-                    or "escalar_caso agendamiento" in contenido
-                ):
+                elif "escalar_caso agendamiento" in contenido:
                     await self.enrutarPeticion(comportamiento, "agendamiento", payload, conv_id)
-            elif perf == "INFORM" and "parametros_completados" in contenido:
-                self._contexto_conversaciones[conv_id] = {
-                    **self._contexto_conversaciones.get(conv_id, {}),
-                    **payload,
-                }
-                self.creencias["estadoAgentes"]["AgenteCotizaciones"] = "ocupado"
-                await self.enviar_fipa(
-                    comportamiento,
-                    JID_COTIZACIONES,
-                    "INFORM",
-                    "(actualizar_parametros parametros_servicio)",
-                    protocolo="FIPA-Request",
-                    conversation_id=conv_id,
-                    payload_extra=payload,
-                )
-            elif perf == "INFORM" and "cliente_declina_oferta" in contenido:
-                id_cliente = str(payload.get("id_cliente", "cliente_001"))
-                motivo = str(payload.get("motivo_rechazo", "excede_presupuesto"))
-                self.cerrarOportunidadVenta(
-                    id_cliente=id_cliente,
-                    motivo=motivo,
-                    estado="descartada",
-                )
-                await self.enviar_fipa(
-                    comportamiento,
-                    JID_VENTAS,
-                    "INFORM",
-                    "(confirmar_cierre_conversacion)",
-                    protocolo="FIPA-Request",
-                    conversation_id=conv_id,
-                    payload_extra={
-                        "id_cliente": id_cliente,
-                        "canal": payload.get("canal", "WhatsApp"),
-                        "estado": "descartada",
-                    },
-                )
             elif perf == "INFORM" and "alerta_caso_critico" in contenido:
                 motivo = str(payload.get("motivo_critico", "tono_hostil"))
                 self._contexto_conversaciones[conv_id] = {**payload, "motivo_critico": motivo}
@@ -464,14 +404,13 @@ class AgenteCoordinador(AgenteBaseMASML):
             if perf == "AGREE":
                 self.creencias["estadoAgentes"]["AgenteCotizaciones"] = "procesando"
             elif perf == "INFORM" and "cotizacion_calculada" in contenido:
-                self.validarPropuestaComercial(payload)
                 self.creencias["cotizacionCalculada"] = payload
                 self.creencias["estadoAgentes"]["AgenteCotizaciones"] = "libre"
                 await self.enviar_fipa(
                     comportamiento,
                     JID_VENTAS,
                     "INFORM",
-                    "(entregar_cotizacion_formal valor_total desglose)",
+                    "(entregar_cotizacion valor_total desglose)",
                     protocolo="FIPA-Request",
                     conversation_id=conv_id,
                     payload_extra=payload,
@@ -489,22 +428,106 @@ class AgenteCoordinador(AgenteBaseMASML):
                 )
 
         elif emisor == "promociones":
-            if perf == "AGREE":
-                self.creencias["estadoAgentes"]["AgentePromociones"] = "procesando"
-            elif perf == "PROPOSE":
-                descuento = float(payload.get("descuento_porciento", 10.0))
-                cotizacion_actual = float(payload.get("cotizacion_actual", 4_500_000.0))
-                evaluacion = self.evaluar_utilidad_propuesta_promo(descuento, cotizacion_actual)
+            if perf == "PROPOSE":
+                id_cliente = str(payload.get("id_cliente", ""))
+                contexto_id = payload.get("contexto_conversacion_id")
+                codigo_promocion = str(payload.get("promocion_codigo", "")).strip()
+                promocion = next(
+                    (
+                        item
+                        for item in self.entorno.tarifasYMargenes.promociones_vigentes
+                        if str(item.get("codigo", "")) == codigo_promocion
+                    ),
+                    None,
+                )
+                cantidad = payload.get(
+                    "cantidad_unidades", payload.get("cantidad")
+                )
+                servicio = str(payload.get("servicio", ""))
+                try:
+                    cotizacion_actual = float(payload.get("cotizacion_actual"))
+                    descuento_propuesto = float(payload.get("descuento_porciento"))
+                    cantidad_entera = int(cantidad)
+                    complejidad = (
+                        int(payload["complejidad"])
+                        if payload.get("complejidad") is not None
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    promocion = None
+                    cotizacion_actual = 0.0
+                    descuento_propuesto = 0.0
+                    cantidad_entera = 0
+                    complejidad = None
+
+                cotizacion_vigente = self.entorno.perfilesClientes.tiene_cotizacion(
+                    id_cliente, str(contexto_id) if contexto_id else None
+                )
+                cotizacion_aprobada = self.entorno.perfilesClientes.cotizacion_aprobada(
+                    id_cliente, str(contexto_id) if contexto_id else None
+                )
+                if (
+                    not cotizacion_vigente
+                    or cotizacion_aprobada
+                    or cotizacion_actual <= 0
+                    or descuento_propuesto <= 0
+                    or not promocion
+                    or not promocion_elegible(
+                        promocion,
+                        servicio,
+                        cantidad_entera,
+                        complejidad,
+                        canal=str(payload.get("canal", "")),
+                    )
+                ):
+                    self.creencias["estadoAgentes"]["AgentePromociones"] = "libre"
+                    await self.enviar_fipa(
+                        comportamiento,
+                        JID_PROMOCIONES,
+                        "REJECT-PROPOSAL",
+                        "(motivo: regla_comercial_no_autoriza)",
+                        protocolo="FIPA-Propose",
+                        conversation_id=conv_id,
+                        payload_extra=payload,
+                    )
+                    await self.enviar_fipa(
+                        comportamiento,
+                        JID_VENTAS,
+                        "REFUSE",
+                        "(motivo: descuento_no_viable)",
+                        protocolo="FIPA-Propose",
+                        conversation_id=conv_id,
+                        payload_extra={
+                            "id_cliente": id_cliente,
+                            "canal": payload.get("canal", "WhatsApp"),
+                            "contexto_conversacion_id": contexto_id,
+                        },
+                    )
+                    return
+
+                limite_promocion = min(
+                    float(promocion["descuento_max"]),
+                    self.entorno.tarifasYMargenes.descuento_maximo_permitido,
+                )
+                descuento = min(descuento_propuesto, limite_promocion)
+                evaluacion = self.evaluar_utilidad_propuesta_promo(
+                    descuento,
+                    cotizacion_actual,
+                    limite_promocion,
+                )
                 self.creencias["propuestaPromocion"] = evaluacion
                 self._contexto_conversaciones[conv_id] = {
                     **self._contexto_conversaciones.get(conv_id, {}),
                     **payload,
                     **evaluacion,
+                    "promocion_codigo": codigo_promocion,
                 }
                 evaluacion_con_ctx = {
                     **evaluacion,
                     "id_cliente": payload.get("id_cliente", "cliente_001"),
                     "canal": payload.get("canal", "WhatsApp"),
+                    "contexto_conversacion_id": contexto_id,
+                    "promocion_codigo": codigo_promocion,
                 }
                 if evaluacion["acepta"]:
                     etiqueta_pct = f"{int(round(descuento))}_porciento"
@@ -537,10 +560,32 @@ class AgenteCoordinador(AgenteBaseMASML):
                         conversation_id=conv_id,
                         payload_extra=evaluacion_con_ctx,
                     )
+            elif perf == "REFUSE":
+                self.creencias["estadoAgentes"]["AgentePromociones"] = "libre"
+                await self.enviar_fipa(
+                    comportamiento,
+                    JID_VENTAS,
+                    "REFUSE",
+                    "(motivo: descuento_no_viable)",
+                    protocolo="FIPA-Propose",
+                    conversation_id=conv_id,
+                    payload_extra={
+                        "id_cliente": payload.get("id_cliente", "cliente_001"),
+                        "canal": payload.get("canal", "WhatsApp"),
+                        "contexto_conversacion_id": payload.get(
+                            "contexto_conversacion_id"
+                        ),
+                    },
+                )
             elif perf == "INFORM" and "promocion_autorizada" in contenido:
                 self.creencias["estadoAgentes"]["AgentePromociones"] = "libre"
                 ctx = self._contexto_conversaciones.get(conv_id, {})
-                descuento = float(payload.get("descuento_porciento", ctx.get("descuento_porciento", 10.0)))
+                descuento = float(
+                    payload.get(
+                        "descuento_porciento",
+                        ctx.get("descuento_porciento", 0.0),
+                    )
+                )
                 await self.transferirPromoAVentas(
                     comportamiento=comportamiento,
                     descuento_porciento=descuento,
@@ -562,6 +607,20 @@ class AgenteCoordinador(AgenteBaseMASML):
                         "fecha_hora": payload.get("fecha_hora", ctx.get("fecha_hora")),
                         "id_cliente": payload.get("id_cliente", ctx.get("id_cliente", "cliente_001")),
                         "nombre_cliente": payload.get("nombre_cliente", ctx.get("nombre_cliente", "Cliente Empresarial")),
+                        "canal": payload.get("canal", ctx.get("canal", "WhatsApp")),
+                        "servicio": payload.get("servicio", ctx.get("servicio")),
+                        "cotizacion_aprobada": payload.get(
+                            "cotizacion_aprobada",
+                            ctx.get("cotizacion_aprobada", False),
+                        ),
+                        "contexto_conversacion_id": payload.get(
+                            "contexto_conversacion_id",
+                            ctx.get("contexto_conversacion_id"),
+                        ),
+                        "alternativas_rechazadas": payload.get(
+                            "alternativas_rechazadas",
+                            ctx.get("alternativas_rechazadas", []),
+                        ),
                     },
                 )
             elif perf == "CONFIRM" and "cita_registrada" in contenido:
@@ -575,6 +634,50 @@ class AgenteCoordinador(AgenteBaseMASML):
                     conversation_id=conv_id,
                     payload_extra=payload,
                 )
+            elif perf == "REFUSE":
+                self.creencias["estadoAgentes"]["AgenteAgendamientos"] = "libre"
+                if "horario_ocupado" in contenido:
+                    await self.enviar_fipa(
+                        comportamiento,
+                        JID_VENTAS,
+                        "INFORM",
+                        "(ofrecer_alternativas bloque_A bloque_B)",
+                        protocolo="FIPA-Query",
+                        conversation_id=conv_id,
+                        payload_extra=payload,
+                    )
+                else:
+                    await self.enviar_fipa(
+                        comportamiento,
+                        JID_VENTAS,
+                        "REFUSE",
+                        "(error_agendamiento datos_rechazados)",
+                        protocolo="FIPA-Query",
+                        conversation_id=conv_id,
+                        payload_extra=payload,
+                    )
+            elif perf == "FAILURE":
+                self.creencias["estadoAgentes"]["AgenteAgendamientos"] = "libre"
+                if "horario_ocupado" in contenido:
+                    await self.enviar_fipa(
+                        comportamiento,
+                        JID_VENTAS,
+                        "INFORM",
+                        "(ofrecer_alternativas bloque_A bloque_B)",
+                        protocolo="FIPA-Query",
+                        conversation_id=conv_id,
+                        payload_extra=payload,
+                    )
+                else:
+                    await self.enviar_fipa(
+                        comportamiento,
+                        JID_VENTAS,
+                        "FAILURE",
+                        "(error_agendamiento persistencia_o_disponibilidad)",
+                        protocolo="FIPA-Query",
+                        conversation_id=conv_id,
+                        payload_extra=payload,
+                    )
             elif perf == "PROPOSE" and "horarios_alternativos" in contenido:
                 self.creencias["estadoAgentes"]["AgenteAgendamientos"] = "libre"
                 await self.enviar_fipa(

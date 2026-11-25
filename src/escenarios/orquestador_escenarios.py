@@ -7,6 +7,7 @@ los modelos de Scikit-Learn y los 5 agentes SPADE sobre XMPP embebido.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -29,6 +30,24 @@ from src.ml.modelos_ml import (
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 from src.persistencia.google_calendar import ClienteGoogleCalendar
 from src.persistencia.repositorio import RepositorioEntorno, crear_repositorio
+
+
+def _metadata_sin_datos_personales(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    campos_privados = {
+        "cedula",
+        "identificacion",
+        "documento",
+        "telefono",
+        "phone",
+        "datoscliente",
+        "datos_cliente",
+    }
+    return {
+        clave: valor
+        for clave, valor in (metadata or {}).items()
+        if str(clave).casefold().replace("-", "").replace(" ", "")
+        not in campos_privados
+    }
 
 
 class ServicioMultiagenteComercial:
@@ -73,7 +92,7 @@ class ServicioMultiagenteComercial:
         # 2. Conexion a Google Calendar API v3 (si esta configurado)
         if google_calendar is not None:
             self.google_calendar: Optional[ClienteGoogleCalendar] = google_calendar
-        elif self.config_botpress.usa_google_calendar:
+        elif self.config_botpress.google_calendar_configurado:
             cred_valor = self.config_botpress.google_service_account_json.strip()
             if not cred_valor.startswith("{") and not Path(cred_valor).is_absolute():
                 cred_valor = str(raiz / cred_valor)
@@ -98,12 +117,29 @@ class ServicioMultiagenteComercial:
         # 3. Entrenamiento dinamico de modelos Scikit-Learn con los datos del negocio
         catalogo = self.entorno.plataformas.portafolio_servicios
         unidad = str(self.entorno.config_negocio.get("unidad_cantidad", "horas"))
+        etiqueta_cantidad = str(
+            self.entorno.config_negocio.get("etiqueta_cantidad", "horas_estimadas")
+        )
+        etiqueta_complejidad = str(
+            self.entorno.config_negocio.get("etiqueta_complejidad", "complejidad")
+        )
         self.modelo_nlp = ModeloNLPVentas(
             catalogo_servicios=catalogo,
             unidad_cantidad=unidad,
+            etiqueta_cantidad=etiqueta_cantidad,
+            etiqueta_complejidad=etiqueta_complejidad,
+            equivalencias_complejidad=self.entorno.config_negocio.get(
+                "equivalencias_complejidad"
+            ),
+            rango_complejidad=(
+                self.entorno.config_negocio.get("complejidad_minima", 1),
+                self.entorno.config_negocio.get("complejidad_maxima", 5),
+            ),
         )
         self.modelo_rf = ModeloCotizacionesRF(
-            self.df_tarifas, catalogo_servicios=catalogo
+            self.df_tarifas,
+            catalogo_servicios=catalogo,
+            unidad_cantidad=unidad,
         )
         self.modelo_knn = ModeloPromocionesKNN(self.df_ofertas)
 
@@ -214,31 +250,121 @@ class ServicioMultiagenteComercial:
         texto: str,
         tipo_evento_sugerido: Optional[str] = None,
         metadata_extra: Optional[Dict[str, Any]] = None,
+        conversation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Punto de entrada principal para mensajes provenientes desde Botpress
         (WhatsApp, Webchat, Facebook Messenger o Instagram).
         """
         idx_inicio = len(self.monitor.historial_mensajes)
-        analisis_previo = self.modelo_nlp.analizar_mensaje(
-            texto, contexto_tipo=tipo_evento_sugerido
-        )
-        tipo_evento = tipo_evento_sugerido or analisis_previo["intencion"]
         perfil_previo = self.entorno.perfilesClientes.obtener_o_crear_perfil(
             id_cliente, nombre=nombre_cliente, canal=canal
         )
+        contexto_conversacion = (
+            self.entorno.perfilesClientes.obtener_estado_conversacion(
+                id_cliente, conversation_id
+            )
+            if conversation_id
+            else {}
+        )
+        parametros_acumulados = (
+            self.entorno.perfilesClientes.obtener_parametros_cotizacion(
+                id_cliente, conversation_id
+            )
+        )
+        esperando_parametros = bool(
+            contexto_conversacion.get(
+                "esperando_parametros_cotizacion",
+                perfil_previo.get("esperando_parametros_cotizacion", False)
+                if not conversation_id
+                else False,
+            )
+        )
+        campos_pendientes = (
+            self.entorno.perfilesClientes.obtener_campos_cotizacion_pendientes(
+                id_cliente, conversation_id
+            )
+            if esperando_parametros
+            else []
+        )
+        if esperando_parametros and not campos_pendientes:
+            campos_pendientes = self.modelo_nlp.campos_cotizacion_pendientes(
+                parametros_acumulados
+            )
+        estado_reserva = contexto_conversacion.get("estado_reserva", {})
+        contexto_nlp = tipo_evento_sugerido
+        if (
+            isinstance(estado_reserva, dict)
+            and estado_reserva.get("paso") == "esperando_horario"
+        ):
+            contexto_nlp = "solicitud_agendamiento"
+        elif (
+            parametros_acumulados.get("fecha_agendamiento_pendiente")
+            or parametros_acumulados.get("fecha_agendamiento_fecha")
+        ):
+            contexto_nlp = "solicitud_agendamiento"
+        else:
+            cotizacion_actual = (
+                contexto_conversacion.get("ultima_cotizacion")
+                if conversation_id
+                else perfil_previo.get("ultima_cotizacion")
+            )
+            texto_afirmativo = bool(
+                re.search(
+                    r"\b(?:s[ií]|claro|perfecto|de acuerdo|hag[aá]moslo|por favor)\b",
+                    texto.casefold(),
+                )
+                and not re.search(r"\bno\b", texto.casefold())
+            )
+            if (
+                cotizacion_actual is not None
+                and not self.entorno.perfilesClientes.cotizacion_aprobada(
+                    id_cliente, conversation_id
+                )
+                and texto_afirmativo
+            ):
+                contexto_nlp = "aceptar_cotizacion"
+        analisis_previo = self.modelo_nlp.analizar_mensaje(
+            texto,
+            contexto_tipo=contexto_nlp,
+            campos_pendientes=campos_pendientes,
+            parametros_acumulados=parametros_acumulados,
+        )
+        tipo_evento = tipo_evento_sugerido or analisis_previo["intencion"]
+        if contexto_nlp == "aceptar_cotizacion":
+            tipo_evento = "aceptar_cotizacion"
+        elif (
+            contexto_nlp == "solicitud_agendamiento"
+            and analisis_previo["intencion"] != "objecion_precio"
+        ):
+            tipo_evento = "solicitud_agendamiento"
+        elif (
+            tipo_evento_sugerido == "objecion_precio"
+            and analisis_previo["intencion"] != "objecion_precio"
+        ):
+            tipo_evento = analisis_previo["intencion"]
+        if (
+            campos_pendientes
+            and analisis_previo.get("parametros_extraidos")
+            and not analisis_previo.get("escalamiento_humano")
+            and analisis_previo["intencion"] == "solicitud_cotizacion"
+        ):
+            tipo_evento = "parametros_servicio"
         estaba_pausado = not bool(perfil_previo.get("automatizacion_activa", True))
         esperar_coordinador = (
-            not estaba_pausado and analisis_previo["tono_cliente"] == "hostil"
+            not estaba_pausado and analisis_previo.get("escalamiento_humano", False)
         )
 
-        payload: Dict[str, Any] = {
-            "id_cliente": id_cliente,
-            "nombre": nombre_cliente,
-            "canal": canal,
-            "texto": texto,
-            **(metadata_extra or {}),
-        }
+        payload: Dict[str, Any] = _metadata_sin_datos_personales(metadata_extra)
+        payload.update(
+            {
+                "id_cliente": id_cliente,
+                "nombre": nombre_cliente,
+                "canal": canal,
+                "texto": texto,
+                "contexto_conversacion_id": conversation_id,
+            }
+        )
         conv_id = f"bp-{canal.lower()}-{id_cliente}-{len(self.entorno.eventos_disparados) + 1}"
         resultado = await self._despachar_y_esperar(
             tipo_evento=tipo_evento,
@@ -267,13 +393,18 @@ class ServicioMultiagenteComercial:
             motivo = str(
                 (alerta_humana or {}).get("motivo_critico", "reclamo_critico_cliente")
             )
+            ultimo_mensaje = re.sub(
+                r"(?<!\d)\+?\d[\d\s().-]{5,18}\d(?!\d)",
+                "[dato numérico oculto]",
+                texto,
+            )
             mensaje_notificacion_dueno = (
                 "ALERTA DE ATENCION HUMANA - SistemaMultiagenteComercial\n"
                 f"Cliente: {perfil.get('nombre', nombre_cliente)}\n"
                 f"ID / Telefono: {id_cliente}\n"
                 f"Canal: {canal}\n"
                 f"Motivo de pausa: {motivo}\n"
-                f"Ultimo mensaje: {texto}\n"
+                f"Ultimo mensaje: {ultimo_mensaje}\n"
                 "La automatizacion quedo pausada unicamente para este chat. "
                 "Ingresa al WhatsApp corporativo para responder directamente."
             )
@@ -316,6 +447,6 @@ class ServicioMultiagenteComercial:
         self.coordinador.creencias["estadoAgentes"]["AgenteVentas"] = "activo"
         self.monitor.registrar_evento_entorno(
             "HumanInTheLoop -> SistemaMultiagenteComercial",
-            f"Automatizacion reactivada para cliente={id_cliente}",
+            "Automatizacion reactivada para cliente",
         )
         return perfil

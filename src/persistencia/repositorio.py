@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -72,6 +75,76 @@ class RepositorioEntorno(ABC):
     def resolver_alertas_cliente(self, id_cliente: str) -> None:
         ...
 
+    @abstractmethod
+    def listar_agendamientos_activos(
+        self, fecha_inicio: str, fecha_fin: str
+    ) -> List[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    def registrar_agendamiento(self, agendamiento: Dict[str, Any]) -> Dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def actualizar_agendamiento(
+        self, id_agendamiento: str, cambios: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def obtener_agendamiento(
+        self, id_agendamiento: str
+    ) -> Optional[Dict[str, Any]]:
+        ...
+
+
+class ConflictoAgendamientoError(ValueError):
+    """Señala que una cita activa ya ocupa parte del intervalo solicitado."""
+
+
+def _fecha_utc(valor: str) -> datetime:
+    fecha = datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+    if fecha.tzinfo is None:
+        raise ValueError("Las fechas de agendamiento deben incluir zona horaria.")
+    return fecha.astimezone(timezone.utc)
+
+
+def _fecha_bogota(valor: str) -> datetime:
+    return _fecha_utc(valor).astimezone(ZoneInfo("America/Bogota"))
+
+
+def _mapear_agendamiento(fila: Dict[str, Any]) -> Dict[str, Any]:
+    resultado = dict(fila)
+    for campo in ("fecha_inicio", "fecha_fin"):
+        if resultado.get(campo):
+            resultado[campo] = _fecha_bogota(str(resultado[campo])).isoformat()
+    if isinstance(resultado.get("metadata"), str):
+        resultado["metadata"] = _parse_json_o_lista(resultado["metadata"], {})
+    return resultado
+
+
+def _es_conflicto_agendamiento_supabase(respuesta: httpx.Response) -> bool:
+    try:
+        cuerpo = respuesta.json()
+    except ValueError:
+        cuerpo = {}
+    if not isinstance(cuerpo, dict):
+        cuerpo = {}
+
+    codigo = str(cuerpo.get("code", ""))
+    if codigo == "23P01":
+        return True
+    if respuesta.status_code != 409:
+        return False
+
+    detalle = " ".join(
+        str(cuerpo.get(campo, ""))
+        for campo in ("message", "details", "hint", "constraint")
+    ).lower()
+    if "agendamientos_sin_cruce_activo" in detalle or "exclusion" in detalle:
+        return True
+    return not codigo
+
 
 def _parse_json_o_lista(valor: Any, fallback: Any) -> Any:
     if valor is None:
@@ -118,15 +191,20 @@ def _mapear_catalogo(filas: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def _mapear_promociones(filas: Iterable[Any]) -> List[Dict[str, Any]]:
-    return [
-        {
+    promociones = []
+    for row in filas:
+        r = dict(row)
+        promocion = {
             "codigo": str(r["codigo"]),
             "descripcion": str(r["descripcion"]),
             "descuento_max": float(r["descuento_max"]),
-            "activa": bool(dict(r).get("activa", True)),
+            "activa": bool(r.get("activa", True)),
         }
-        for r in filas
-    ]
+        condiciones = r.get("condiciones")
+        if condiciones is not None:
+            promocion["condiciones"] = _parse_json_o_lista(condiciones, {})
+        promociones.append(promocion)
+    return promociones
 
 
 def _mapear_tarifas_df(filas: Iterable[Any]) -> pd.DataFrame:
@@ -348,6 +426,34 @@ class RepositorioSQLite(RepositorioEntorno):
                 estado TEXT NOT NULL,
                 resuelta INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS agendamientos (
+                id TEXT PRIMARY KEY,
+                negocio_id TEXT NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
+                id_cliente TEXT NOT NULL,
+                nombre_cliente TEXT NOT NULL,
+                canal TEXT NOT NULL,
+                servicio TEXT,
+                fecha_inicio TEXT NOT NULL,
+                fecha_fin TEXT NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'confirmada'
+                    CHECK (estado IN ('pendiente', 'confirmada', 'cancelada', 'error')),
+                registrado_en TEXT NOT NULL
+                    CHECK (registrado_en IN ('supabase_y_google_calendar', 'solo_supabase')),
+                google_calendar_estado TEXT NOT NULL
+                    CHECK (google_calendar_estado IN ('pendiente', 'sincronizado', 'no_configurado', 'error')),
+                google_event_id TEXT,
+                google_event_link TEXT,
+                google_calendar_error TEXT,
+                observaciones TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (fecha_fin > fecha_inicio)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agendamientos_negocio_fecha
+                ON agendamientos (negocio_id, fecha_inicio, fecha_fin);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_agendamientos_google_event
+                ON agendamientos (google_event_id) WHERE google_event_id IS NOT NULL;
             """
         )
         self._conn.commit()
@@ -555,6 +661,143 @@ class RepositorioSQLite(RepositorioEntorno):
         )
         self._conn.commit()
 
+    def listar_agendamientos_activos(
+        self, fecha_inicio: str, fecha_fin: str
+    ) -> List[Dict[str, Any]]:
+        inicio_solicitado = _fecha_utc(fecha_inicio)
+        fin_solicitado = _fecha_utc(fecha_fin)
+        rows = self._conn.execute(
+            """
+            SELECT * FROM agendamientos
+            WHERE negocio_id = ? AND estado IN ('pendiente', 'confirmada')
+            """,
+            (self.negocio_id,),
+        ).fetchall()
+        return [
+            _mapear_agendamiento(dict(row))
+            for row in rows
+            if inicio_solicitado < _fecha_utc(row["fecha_fin"])
+            and fin_solicitado > _fecha_utc(row["fecha_inicio"])
+        ]
+
+    def registrar_agendamiento(self, agendamiento: Dict[str, Any]) -> Dict[str, Any]:
+        inicio = str(agendamiento["fecha_inicio"])
+        fin = str(agendamiento["fecha_fin"])
+        inicio_utc = _fecha_utc(inicio)
+        fin_utc = _fecha_utc(fin)
+        if fin_utc <= inicio_utc:
+            raise ValueError("La fecha final debe ser posterior a la fecha inicial.")
+
+        registro = {
+            "id": str(agendamiento.get("id") or uuid.uuid4()),
+            "negocio_id": self.negocio_id,
+            "id_cliente": str(agendamiento["id_cliente"]),
+            "nombre_cliente": str(agendamiento["nombre_cliente"]),
+            "canal": str(agendamiento["canal"]),
+            "servicio": agendamiento.get("servicio"),
+            "fecha_inicio": inicio,
+            "fecha_fin": fin,
+            "estado": str(agendamiento.get("estado", "confirmada")),
+            "registrado_en": str(agendamiento["registrado_en"]),
+            "google_calendar_estado": str(agendamiento["google_calendar_estado"]),
+            "google_event_id": agendamiento.get("google_event_id"),
+            "google_event_link": agendamiento.get("google_event_link"),
+            "google_calendar_error": agendamiento.get("google_calendar_error"),
+            "observaciones": agendamiento.get("observaciones"),
+            "metadata": json.dumps(agendamiento.get("metadata", {}), ensure_ascii=False),
+        }
+
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            activos = self._conn.execute(
+                """
+                SELECT fecha_inicio, fecha_fin FROM agendamientos
+                WHERE negocio_id = ? AND estado IN ('pendiente', 'confirmada')
+                """,
+                (self.negocio_id,),
+            ).fetchall()
+            if any(
+                inicio_utc < _fecha_utc(row["fecha_fin"])
+                and fin_utc > _fecha_utc(row["fecha_inicio"])
+                for row in activos
+            ):
+                raise ConflictoAgendamientoError(
+                    "El horario solicitado se cruza con otra cita activa."
+                )
+            self._conn.execute(
+                """
+                INSERT INTO agendamientos (
+                    id, negocio_id, id_cliente, nombre_cliente, canal, servicio,
+                    fecha_inicio, fecha_fin, estado, registrado_en,
+                    google_calendar_estado, google_event_id, google_event_link,
+                    google_calendar_error, observaciones, metadata
+                ) VALUES (
+                    :id, :negocio_id, :id_cliente, :nombre_cliente, :canal, :servicio,
+                    :fecha_inicio, :fecha_fin, :estado, :registrado_en,
+                    :google_calendar_estado, :google_event_id, :google_event_link,
+                    :google_calendar_error, :observaciones, :metadata
+                )
+                """,
+                registro,
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+        fila = self._conn.execute(
+            "SELECT * FROM agendamientos WHERE id = ?", (registro["id"],)
+        ).fetchone()
+        if fila is None:
+            raise RuntimeError("No se pudo verificar el agendamiento registrado.")
+        return _mapear_agendamiento(dict(fila))
+
+    def actualizar_agendamiento(
+        self, id_agendamiento: str, cambios: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        permitidos = {
+            "estado",
+            "registrado_en",
+            "google_calendar_estado",
+            "google_event_id",
+            "google_event_link",
+            "google_calendar_error",
+            "observaciones",
+            "metadata",
+        }
+        valores = {key: value for key, value in cambios.items() if key in permitidos}
+        if not valores:
+            raise ValueError("No hay campos válidos para actualizar el agendamiento.")
+        if "metadata" in valores:
+            valores["metadata"] = json.dumps(valores["metadata"], ensure_ascii=False)
+        valores["updated_at"] = datetime.now(timezone.utc).isoformat()
+        assignments = ", ".join(f"{key} = :{key}" for key in valores)
+        valores.update({"id": id_agendamiento, "negocio_id": self.negocio_id})
+        self._conn.execute(
+            f"""
+            UPDATE agendamientos SET {assignments}
+            WHERE id = :id AND negocio_id = :negocio_id
+            """,
+            valores,
+        )
+        self._conn.commit()
+        fila = self._conn.execute(
+            "SELECT * FROM agendamientos WHERE id = ? AND negocio_id = ?",
+            (id_agendamiento, self.negocio_id),
+        ).fetchone()
+        if fila is None:
+            raise RuntimeError("No se encontró el agendamiento para actualizar.")
+        return _mapear_agendamiento(dict(fila))
+
+    def obtener_agendamiento(
+        self, id_agendamiento: str
+    ) -> Optional[Dict[str, Any]]:
+        fila = self._conn.execute(
+            "SELECT * FROM agendamientos WHERE id = ? AND negocio_id = ?",
+            (id_agendamiento, self.negocio_id),
+        ).fetchone()
+        return _mapear_agendamiento(dict(fila)) if fila is not None else None
+
 
 class RepositorioSupabase(RepositorioEntorno):
     """
@@ -682,6 +925,133 @@ class RepositorioSupabase(RepositorioEntorno):
             json={"resuelta": True},
         )
         resp.raise_for_status()
+
+    def listar_agendamientos_activos(
+        self, fecha_inicio: str, fecha_fin: str
+    ) -> List[Dict[str, Any]]:
+        inicio = _fecha_utc(fecha_inicio).isoformat()
+        fin = _fecha_utc(fecha_fin).isoformat()
+        return [
+            _mapear_agendamiento(row)
+            for row in self._get(
+                "agendamientos",
+                {
+                    "select": "*",
+                    "estado": "in.(pendiente,confirmada)",
+                    "fecha_inicio": f"lt.{fin}",
+                    "fecha_fin": f"gt.{inicio}",
+                },
+            )
+        ]
+
+    def registrar_agendamiento(self, agendamiento: Dict[str, Any]) -> Dict[str, Any]:
+        inicio = str(agendamiento["fecha_inicio"])
+        fin = str(agendamiento["fecha_fin"])
+        inicio_utc = _fecha_utc(inicio)
+        fin_utc = _fecha_utc(fin)
+        if fin_utc <= inicio_utc:
+            raise ValueError("La fecha final debe ser posterior a la fecha inicial.")
+        if self.listar_agendamientos_activos(inicio, fin):
+            raise ConflictoAgendamientoError(
+                "El horario solicitado se cruza con otra cita activa."
+            )
+
+        valores_requeridos = {
+            "id_cliente": agendamiento.get("id_cliente"),
+            "nombre_cliente": agendamiento.get("nombre_cliente"),
+            "canal": agendamiento.get("canal"),
+        }
+        if any(not str(valor or "").strip() for valor in valores_requeridos.values()):
+            raise ValueError(
+                "El agendamiento requiere id_cliente, nombre_cliente y canal."
+            )
+        estado = str(agendamiento.get("estado", "confirmada"))
+        registrado_en = str(agendamiento.get("registrado_en", ""))
+        google_estado = str(agendamiento.get("google_calendar_estado", ""))
+        if estado not in {"pendiente", "confirmada", "cancelada", "error"}:
+            raise ValueError("Estado de agendamiento no permitido.")
+        if registrado_en not in {"supabase_y_google_calendar", "solo_supabase"}:
+            raise ValueError("Valor de registrado_en no permitido.")
+        if google_estado not in {
+            "pendiente",
+            "sincronizado",
+            "no_configurado",
+            "error",
+        }:
+            raise ValueError("Estado de Google Calendar no permitido.")
+
+        payload = {
+            "id": str(agendamiento.get("id") or uuid.uuid4()),
+            "negocio_id": self.negocio_id,
+            "id_cliente": str(agendamiento["id_cliente"]).strip(),
+            "nombre_cliente": str(agendamiento["nombre_cliente"]).strip(),
+            "canal": str(agendamiento["canal"]).strip(),
+            "servicio": agendamiento.get("servicio"),
+            "fecha_inicio": _fecha_bogota(inicio).isoformat(),
+            "fecha_fin": _fecha_bogota(fin).isoformat(),
+            "estado": estado,
+            "registrado_en": registrado_en,
+            "google_calendar_estado": google_estado,
+            "google_event_id": agendamiento.get("google_event_id"),
+            "google_event_link": agendamiento.get("google_event_link"),
+            "google_calendar_error": agendamiento.get("google_calendar_error"),
+            "observaciones": agendamiento.get("observaciones"),
+            "metadata": agendamiento.get("metadata", {}),
+        }
+        headers = {**self.headers, "Prefer": "return=representation"}
+        resp = self._client.post(
+            f"{self.base_rest}/agendamientos", headers=headers, json=payload
+        )
+        if _es_conflicto_agendamiento_supabase(resp):
+            raise ConflictoAgendamientoError(
+                "El horario fue reservado por otra solicitud simultánea."
+            ) from None
+        resp.raise_for_status()
+        filas = resp.json()
+        if not isinstance(filas, list) or not filas:
+            raise RuntimeError("Supabase no confirmó el INSERT del agendamiento.")
+        return _mapear_agendamiento(filas[0])
+
+    def actualizar_agendamiento(
+        self, id_agendamiento: str, cambios: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        permitidos = {
+            "estado",
+            "registrado_en",
+            "google_calendar_estado",
+            "google_event_id",
+            "google_event_link",
+            "google_calendar_error",
+            "observaciones",
+            "metadata",
+        }
+        payload = {key: value for key, value in cambios.items() if key in permitidos}
+        if not payload:
+            raise ValueError("No hay campos válidos para actualizar el agendamiento.")
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        resp = self._client.patch(
+            f"{self.base_rest}/agendamientos",
+            headers={**self.headers, "Prefer": "return=representation"},
+            params={
+                "negocio_id": f"eq.{self.negocio_id}",
+                "id": f"eq.{id_agendamiento}",
+            },
+            json=payload,
+        )
+        resp.raise_for_status()
+        filas = resp.json()
+        if not isinstance(filas, list) or not filas:
+            raise RuntimeError("Supabase no confirmó el UPDATE del agendamiento.")
+        return _mapear_agendamiento(filas[0])
+
+    def obtener_agendamiento(
+        self, id_agendamiento: str
+    ) -> Optional[Dict[str, Any]]:
+        filas = self._get(
+            "agendamientos",
+            {"id": f"eq.{id_agendamiento}", "select": "*"},
+        )
+        return _mapear_agendamiento(filas[0]) if filas else None
 
 
 def crear_repositorio(

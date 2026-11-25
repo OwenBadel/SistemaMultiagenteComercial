@@ -25,7 +25,7 @@ Para que `AgenteAgendamientos` consulte disponibilidad real y cree citas directa
 ### Paso 1.2: Compartir el Google Calendar (`https://calendar.google.com/`)
 1. Abre `google_service_account.json` con cualquier editor y copia el correo que aparece en el campo `"client_email"` (ejemplo: `bot-agenda-comercial@tu-proyecto.iam.gserviceaccount.com`).
 2. Abre **Google Calendar** con la cuenta del dueno donde se registraran las citas.
-3. En la columna izquierda (**Mis calendarios**), pasa el mouse sobre tu calendario -> clic en los tres puntos -> **Configuracion y uso compartido**.
+3. En la columna izquierda (**Mis calendarios**), pasa el mouse sobre tu calendario -> clic en los tres puntos -> **Configuracion y uso compartido**. 
 4. Baja hasta **Compartir con determinadas personas o grupos** -> **Agregar personas y grupos**.
 5. Pega el `client_email` de la Service Account y en permisos selecciona **"Hacer cambios en eventos"** (obligatorio para poder crear citas).
 
@@ -87,12 +87,10 @@ En la maquina donde correra el servidor Python:
 
 ## 3. Configuracion en Botpress Studio (`https://studio.botpress.cloud/`)
 
-En tu bot de Botpress (donde ya estan conectados WhatsApp corporativo, Webchat, Instagram o Messenger), Botpress actua como la pasarela conversacional de primera linea hacia nuestra API en Python:
+En tu bot de Botpress (donde ya estan conectados WhatsApp corporativo, Webchat, Instagram o Messenger), Botpress debe actuar **unicamente como puente** hacia nuestra API Python:
 
-### Paso 3.1: Modelo de Responsabilidad (Opcion A: Botpress NLU + Python TF-IDF)
-- **Rol de Botpress:** Captura el mensaje en los canales reales (WhatsApp, Webchat, etc.), gestiona los turnos de conversacion y entrega el texto directamente al backend. De forma opcional, si deseas que el NLU de Botpress identifique la intencion previamente, puede enviar el campo `tipo_evento_sugerido`.
-- **Rol del Backend Python:** El `AgenteVentas` analiza el texto con su modelo Scikit-Learn TF-IDF enriquecido y reglas lexicas, o procesa directamente la sugerencia de Botpress. Los agentes resuelven la cotizacion (Random Forest), el descuento (KNN), la cita en Google Calendar y la respuesta comercial final en milisegundos.
-- **Importante:** Desactiva respuestas automaticas de **Knowledge Base** o nodos **Autonomous** libres que respondan por su cuenta antes de ejecutar el codigo de enlace, para que sea siempre el sistema multiagente quien genere las respuestas de negocio.
+### Paso 3.1: Evitar respuestas de la IA nativa de Botpress
+- Asegurate de no tener activa una **Knowledge Base** ni un nodo **Autonomous** respondiendo libremente sobre el flujo principal, para que cada mensaje pase directo a los agentes SPADE en Python.
 
 ### Paso 3.2: Crear Variables de Flujo (Workflow Variables)
 En el flujo principal de Botpress Studio, crea estas 5 variables en la seccion **Variables**:
@@ -104,6 +102,10 @@ En el flujo principal de Botpress Studio, crea estas 5 variables en la seccion *
 
 ### Paso 3.3: Configurar la tarjeta `Execute Code`
 Justo despues de recibir el mensaje del usuario (por ejemplo, tras una tarjeta **Wait for User Input** o en el nodo inicial), agrega una tarjeta **Execute Code** y pega este codigo reemplazando **`REEMPLAZA_AQUI_TU_URL_NGROK`** por tu URL HTTPS de ngrok:
+
+Envía `event.userId` y `event.conversationId` por separado. El `userId` debe ser estable entre mensajes del mismo cliente; el SMA usa `conversationId` como fallback limitado a esa conversación. No copies el `conversationId` dentro de `userId`, no uses `event.id` (es un ID por mensaje) ni un nombre visible como identidad. Si Botpress entrega un valor genérico y no hay un `conversationId` válido, el endpoint devuelve HTTP 400 en lugar de compartir perfiles.
+
+Los perfiles nuevos basados en `userId` se separan por canal. Los perfiles previos con un `userId` válido se continúan usando únicamente si el canal guardado coincide; no se migran ni combinan. El perfil genérico `Anonymous User (User)` no se reutiliza ni se reactiva automáticamente y requiere revisión administrativa.
 
 ```javascript
 const URL_SMA = 'https://REEMPLAZA_AQUI_TU_URL_NGROK/api/botpress/mensaje'
@@ -118,11 +120,10 @@ try {
     URL_SMA,
     {
       channel: event.channel || 'WhatsApp',
-      userId: event.userId || event.conversationId,
+      userId: event.userId,
+      conversationId: event.conversationId,
       userName: event.tags?.user?.name || 'Cliente',
-      text: event.preview,
-      // Opcional: si Botpress clasifica la intencion con su NLU/IA, puede sugerirla:
-      // tipo_evento_sugerido: event.nlu?.intent?.name || null
+      text: event.preview
     },
     { headers, timeout: 15000 }
   )
@@ -138,6 +139,8 @@ try {
   workflow.notificarDueno = false
 }
 ```
+
+Las rutas administrativas `GET /api/estado` y `POST /api/humano/reactivar` requieren `HUMAN_REACTIVATION_API_KEY` en el servidor y el header `X-Admin-API-Key`. Esta clave es distinta de `BOTPRESS_API_KEY`; el monitor la solicita al abrirse y la conserva únicamente en memoria mientras está abierto. No la guardes en el flujo de Botpress ni en almacenamiento del navegador. Si la clave administrativa no está configurada, las rutas fallan cerradas.
 
 ### Paso 3.4: Conectar las condiciones de salida (Transiciones)
 Despues de la tarjeta **Execute Code**, configura las salidas del nodo usando tarjetas **Expression / Transition**:

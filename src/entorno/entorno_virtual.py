@@ -5,18 +5,28 @@ desacoplado mediante RepositorioEntorno (Supabase en la nube o SQLite local).
 """
 from __future__ import annotations
 
+import sqlite3
+import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
+import httpx
 import pandas as pd
 
 from src.ml.datasets import CATALOGO_SERVICIOS
-from src.persistencia.google_calendar import ClienteGoogleCalendar
+from src.persistencia.google_calendar import ClienteGoogleCalendar, ErrorGoogleCalendar
+from src.reglas_comerciales import validar_datos_cliente_reserva
 from src.persistencia.repositorio import (
+    ConflictoAgendamientoError,
     RepositorioEntorno,
     RepositorioSQLite,
 )
+
+_CLAVE_ESTADO_COTIZACION = "_estado_cotizacion"
+_CLAVE_CAMPOS_PENDIENTES_COTIZACION = "_campos_pendientes_cotizacion"
+_CLAVE_CONTEXTOS_CONVERSACION = "_contextos_conversacion"
 
 
 @dataclass
@@ -113,6 +123,404 @@ class Informacion:
             self._on_save(perfil)
         return perfil
 
+    def _obtener_contexto_conversacion(
+        self, id_cliente: str, conversation_id: Optional[str]
+    ) -> Dict[str, Any]:
+        if not conversation_id:
+            perfil = self.perfiles.get(id_cliente, {})
+            parametros = perfil.get("parametros_parciales", {})
+            estado_reserva = (
+                parametros.get("_estado_reserva_legacy", {})
+                if isinstance(parametros, dict)
+                else {}
+            )
+            return {"estado_reserva": dict(estado_reserva)} if isinstance(
+                estado_reserva, dict
+            ) else {}
+        perfil = self.perfiles.get(id_cliente, {})
+        parametros = perfil.get("parametros_parciales", {})
+        contextos = (
+            parametros.get(_CLAVE_CONTEXTOS_CONVERSACION, {})
+            if isinstance(parametros, dict)
+            else {}
+        )
+        contexto = contextos.get(str(conversation_id), {}) if isinstance(contextos, dict) else {}
+        return dict(contexto) if isinstance(contexto, dict) else {}
+
+    def _guardar_contexto_conversacion(
+        self, id_cliente: str, conversation_id: str, contexto: Dict[str, Any]
+    ) -> None:
+        perfil = self.obtener_o_crear_perfil(id_cliente)
+        parametros = perfil.get("parametros_parciales", {})
+        parametros_actuales = dict(parametros) if isinstance(parametros, dict) else {}
+        contextos = parametros_actuales.get(_CLAVE_CONTEXTOS_CONVERSACION, {})
+        contextos_actuales = dict(contextos) if isinstance(contextos, dict) else {}
+        contextos_actuales[conversation_id] = contexto
+        parametros_actuales[_CLAVE_CONTEXTOS_CONVERSACION] = contextos_actuales
+        esperando_cotizacion = any(
+            isinstance(item, dict)
+            and item.get("esperando_parametros_cotizacion", False)
+            for item in contextos_actuales.values()
+        )
+        self.actualizar_perfil(
+            id_cliente,
+            parametros_parciales=parametros_actuales,
+            esperando_parametros_cotizacion=esperando_cotizacion,
+        )
+
+    def obtener_estado_conversacion(
+        self, id_cliente: str, conversation_id: Optional[str]
+    ) -> Dict[str, Any]:
+        """Obtiene el contexto comercial aislado de una conversación Botpress."""
+        return self._obtener_contexto_conversacion(id_cliente, conversation_id)
+
+    def actualizar_estado_conversacion(
+        self,
+        id_cliente: str,
+        conversation_id: Optional[str],
+        cambios: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Persiste estado comercial y datos de reserva bajo la conversación."""
+        if not conversation_id:
+            perfil = self.obtener_o_crear_perfil(id_cliente)
+            parametros = perfil.get("parametros_parciales", {})
+            parametros_actuales = (
+                dict(parametros) if isinstance(parametros, dict) else {}
+            )
+            estado = parametros_actuales.get("_estado_reserva_legacy", {})
+            estado_actual = dict(estado) if isinstance(estado, dict) else {}
+            if isinstance(cambios.get("estado_reserva"), dict):
+                estado_actual = dict(cambios["estado_reserva"])
+            else:
+                estado_actual.update(cambios)
+            parametros_actuales["_estado_reserva_legacy"] = estado_actual
+            self.actualizar_perfil(
+                id_cliente, parametros_parciales=parametros_actuales
+            )
+            return {"estado_reserva": estado_actual}
+        contexto = self._obtener_contexto_conversacion(id_cliente, conversation_id)
+        contexto.update(cambios)
+        self._guardar_contexto_conversacion(id_cliente, conversation_id, contexto)
+        return contexto
+
+    def obtener_parametros_cotizacion(
+        self, id_cliente: str, conversation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Retorna los parametros de cotizacion sin el estado interno de aprobacion."""
+        perfil = self.perfiles.get(id_cliente, {})
+        parametros = perfil.get("parametros_parciales", {})
+        if not isinstance(parametros, dict):
+            return {}
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            parametros = contexto.get("parametros_cotizacion", {})
+            if not isinstance(parametros, dict):
+                return {}
+        return {
+            clave: valor
+            for clave, valor in parametros.items()
+            if clave
+            not in {
+                _CLAVE_ESTADO_COTIZACION,
+                _CLAVE_CAMPOS_PENDIENTES_COTIZACION,
+                _CLAVE_CONTEXTOS_CONVERSACION,
+            }
+        }
+
+    def obtener_campos_cotizacion_pendientes(
+        self, id_cliente: str, conversation_id: Optional[str] = None
+    ) -> List[str]:
+        """Obtiene los campos exactos solicitados por la ultima validacion."""
+        perfil = self.perfiles.get(id_cliente, {})
+        parametros = perfil.get("parametros_parciales", {})
+        if not isinstance(parametros, dict):
+            return []
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            parametros = contexto.get("parametros_cotizacion", {})
+            if not isinstance(parametros, dict):
+                return []
+        campos = parametros.get(_CLAVE_CAMPOS_PENDIENTES_COTIZACION, [])
+        return [str(campo) for campo in campos] if isinstance(campos, list) else []
+
+    def actualizar_parametros_cotizacion(
+        self,
+        id_cliente: str,
+        cambios: Dict[str, Any],
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Actualiza parámetros comerciales sin alterar aprobación ni campos pendientes."""
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            parametros = contexto.get("parametros_cotizacion", {})
+            parametros_actuales = (
+                dict(parametros) if isinstance(parametros, dict) else {}
+            )
+            parametros_actuales.update(cambios)
+            contexto["parametros_cotizacion"] = parametros_actuales
+            self._guardar_contexto_conversacion(
+                id_cliente, conversation_id, contexto
+            )
+            return self.perfiles[id_cliente]
+        perfil = self.obtener_o_crear_perfil(id_cliente)
+        parametros = perfil.get("parametros_parciales", {})
+        parametros_actuales = dict(parametros) if isinstance(parametros, dict) else {}
+        parametros_actuales.update(cambios)
+        return self.actualizar_perfil(
+            id_cliente, parametros_parciales=parametros_actuales
+        )
+
+    def registrar_parametros_cotizacion_pendientes(
+        self,
+        id_cliente: str,
+        parametros: Dict[str, Any],
+        campos: List[str],
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Persiste parametros y campos faltantes para continuar en otro turno."""
+        parametros_persistidos = dict(parametros)
+        parametros_persistidos[_CLAVE_CAMPOS_PENDIENTES_COTIZACION] = list(campos)
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            contexto["parametros_cotizacion"] = parametros_persistidos
+            contexto["esperando_parametros_cotizacion"] = True
+            self._guardar_contexto_conversacion(
+                id_cliente, conversation_id, contexto
+            )
+            return self.perfiles[id_cliente]
+        return self.actualizar_perfil(
+            id_cliente,
+            parametros_parciales=parametros_persistidos,
+            esperando_parametros_cotizacion=True,
+        )
+
+    def establecer_fecha_agendamiento_pendiente(
+        self,
+        id_cliente: str,
+        fecha_hora: Optional[str],
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """Guarda o limpia la solicitud de horario sin alterar otros parametros."""
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            parametros = contexto.get("parametros_cotizacion", {})
+            parametros_actuales = (
+                dict(parametros) if isinstance(parametros, dict) else {}
+            )
+            if fecha_hora:
+                parametros_actuales["fecha_agendamiento_pendiente"] = fecha_hora
+                parametros_actuales.pop("fecha_agendamiento_fecha", None)
+                parametros_actuales.pop("fecha_hora_falta", None)
+            else:
+                for clave in (
+                    "fecha_agendamiento_pendiente",
+                    "fecha_agendamiento_fecha",
+                    "fecha_hora",
+                    "fecha_hora_falta",
+                ):
+                    parametros_actuales.pop(clave, None)
+            contexto["parametros_cotizacion"] = parametros_actuales
+            self._guardar_contexto_conversacion(
+                id_cliente, conversation_id, contexto
+            )
+            return
+        perfil = self.obtener_o_crear_perfil(id_cliente)
+        parametros = perfil.get("parametros_parciales", {})
+        parametros_actuales = dict(parametros) if isinstance(parametros, dict) else {}
+        if fecha_hora:
+            parametros_actuales["fecha_agendamiento_pendiente"] = fecha_hora
+        else:
+            parametros_actuales.pop("fecha_agendamiento_pendiente", None)
+        self.actualizar_perfil(id_cliente, parametros_parciales=parametros_actuales)
+
+    def tiene_cotizacion(
+        self, id_cliente: str, conversation_id: Optional[str] = None
+    ) -> bool:
+        perfil = self.perfiles.get(id_cliente)
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            return bool(
+                contexto.get("ultima_cotizacion") is not None
+                and not contexto.get("esperando_parametros_cotizacion", False)
+            )
+        return bool(
+            perfil
+            and perfil.get("ultima_cotizacion") is not None
+            and not perfil.get("esperando_parametros_cotizacion", False)
+        )
+
+    def cotizacion_aprobada(
+        self, id_cliente: str, conversation_id: Optional[str] = None
+    ) -> bool:
+        perfil = self.perfiles.get(id_cliente)
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            parametros = contexto.get("parametros_cotizacion", {})
+            estado = (
+                parametros.get(_CLAVE_ESTADO_COTIZACION)
+                if isinstance(parametros, dict)
+                else None
+            )
+            if (
+                contexto.get("ultima_cotizacion") is None
+                or contexto.get("esperando_parametros_cotizacion", False)
+                or not isinstance(estado, dict)
+                or estado.get("aprobada") is not True
+            ):
+                return False
+            try:
+                return float(estado.get("valor_total")) == float(
+                    contexto["ultima_cotizacion"]
+                )
+            except (TypeError, ValueError):
+                return False
+        if (
+            not perfil
+            or perfil.get("ultima_cotizacion") is None
+            or perfil.get("esperando_parametros_cotizacion", False)
+        ):
+            return False
+        parametros = perfil.get("parametros_parciales", {})
+        if not isinstance(parametros, dict):
+            return False
+        estado = parametros.get(_CLAVE_ESTADO_COTIZACION)
+        if not isinstance(estado, dict) or estado.get("aprobada") is not True:
+            return False
+        try:
+            return float(estado.get("valor_total")) == float(
+                perfil["ultima_cotizacion"]
+            )
+        except (TypeError, ValueError):
+            return False
+
+    def registrar_cotizacion_calculada(
+        self,
+        id_cliente: str,
+        valor_total: float,
+        complejidad: int,
+        parametros_cotizacion: Optional[Dict[str, Any]] = None,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Persiste una cotizacion nueva como pendiente de aprobacion del cliente."""
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            parametros = dict(contexto.get("parametros_cotizacion", {}))
+            parametros.update(parametros_cotizacion or {})
+            parametros[_CLAVE_ESTADO_COTIZACION] = {
+                "valor_total": float(valor_total),
+                "aprobada": False,
+            }
+            contexto.update(
+                {
+                    "parametros_cotizacion": parametros,
+                    "ultima_cotizacion": float(valor_total),
+                    "ultima_complejidad": int(complejidad),
+                    "esperando_parametros_cotizacion": False,
+                }
+            )
+            self._guardar_contexto_conversacion(
+                id_cliente, conversation_id, contexto
+            )
+            return self.actualizar_perfil(
+                id_cliente,
+                ultima_cotizacion=float(valor_total),
+                ultima_complejidad=int(complejidad),
+            )
+        parametros = self.obtener_parametros_cotizacion(id_cliente)
+        parametros.update(parametros_cotizacion or {})
+        parametros[_CLAVE_ESTADO_COTIZACION] = {
+            "valor_total": float(valor_total),
+            "aprobada": False,
+        }
+        return self.actualizar_perfil(
+            id_cliente,
+            ultima_cotizacion=float(valor_total),
+            ultima_complejidad=int(complejidad),
+            parametros_parciales=parametros,
+            esperando_parametros_cotizacion=False,
+        )
+
+    def aprobar_ultima_cotizacion(
+        self, id_cliente: str, conversation_id: Optional[str] = None
+    ) -> bool:
+        """Marca aprobada la ultima cotizacion existente para un cliente."""
+        perfil = self.perfiles.get(id_cliente)
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            if (
+                contexto.get("ultima_cotizacion") is None
+                or contexto.get("esperando_parametros_cotizacion", False)
+            ):
+                return False
+            parametros = contexto.get("parametros_cotizacion", {})
+            parametros_actuales = (
+                dict(parametros) if isinstance(parametros, dict) else {}
+            )
+            estado = parametros_actuales.get(_CLAVE_ESTADO_COTIZACION)
+            valor_total = float(contexto["ultima_cotizacion"])
+            if not isinstance(estado, dict):
+                estado = {"valor_total": valor_total, "aprobada": False}
+            parametros_actuales[_CLAVE_ESTADO_COTIZACION] = {
+                **estado,
+                "valor_total": valor_total,
+                "aprobada": True,
+            }
+            contexto["parametros_cotizacion"] = parametros_actuales
+            self._guardar_contexto_conversacion(
+                id_cliente, conversation_id, contexto
+            )
+            return self.cotizacion_aprobada(id_cliente, conversation_id)
+        if (
+            not perfil
+            or perfil.get("ultima_cotizacion") is None
+            or perfil.get("esperando_parametros_cotizacion", False)
+        ):
+            return False
+        try:
+            valor_total = float(perfil["ultima_cotizacion"])
+        except (TypeError, ValueError):
+            return False
+
+        parametros = perfil.get("parametros_parciales", {})
+        parametros_actuales = dict(parametros) if isinstance(parametros, dict) else {}
+        estado = parametros_actuales.get(_CLAVE_ESTADO_COTIZACION)
+        if not isinstance(estado, dict):
+            estado = {"valor_total": valor_total, "aprobada": False}
+        else:
+            try:
+                if float(estado.get("valor_total")) != valor_total:
+                    estado = {"valor_total": valor_total, "aprobada": False}
+            except (TypeError, ValueError):
+                estado = {"valor_total": valor_total, "aprobada": False}
+
+        parametros_actuales[_CLAVE_ESTADO_COTIZACION] = {
+            **estado,
+            "valor_total": valor_total,
+            "aprobada": True,
+        }
+        self.actualizar_perfil(
+            id_cliente, parametros_parciales=parametros_actuales
+        )
+        return self.cotizacion_aprobada(id_cliente)
+
 
 @dataclass
 class BaseDatos:
@@ -145,6 +553,30 @@ def _agenda_local_respaldo() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def _intervalo_agendamiento(
+    fecha_hora: str, duracion_minutos: int = 60
+) -> tuple[datetime, datetime]:
+    try:
+        inicio = datetime.fromisoformat(fecha_hora.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(
+            "La fecha de la cita debe tener el formato YYYY-MM-DD HH:MM."
+        ) from None
+    zona = ZoneInfo("America/Bogota")
+    if inicio.tzinfo is None:
+        inicio = inicio.replace(tzinfo=zona)
+    else:
+        inicio = inicio.astimezone(zona)
+    fin = inicio + timedelta(minutes=duracion_minutos)
+    return inicio, fin
+
+
+def _formato_fecha_hora_calendario(inicio: datetime) -> str:
+    if inicio.second or inicio.microsecond:
+        return inicio.isoformat(timespec="auto")
+    return inicio.strftime("%Y-%m-%d %H:%M")
+
+
 @dataclass
 class Calendario:
     """
@@ -155,32 +587,110 @@ class Calendario:
 
     bloques: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     google_calendar: Optional[ClienteGoogleCalendar] = field(default=None, repr=False)
+    repositorio: Optional[RepositorioEntorno] = field(default=None, repr=False)
+    duracion_minutos: int = 60
 
     @property
     def modo(self) -> str:
-        return "Google Calendar API v3" if self.google_calendar is not None else "Local (Respaldo)"
+        if self.google_calendar is not None:
+            return "Google Calendar API v3"
+        if self.repositorio is not None and "Supabase" in self.repositorio.modo_bd:
+            return "Supabase (solo)"
+        return "Local (Respaldo)"
 
     def verificar_disponibilidad(self, fecha_hora: str) -> bool:
-        """Retorna True si el bloque esta libre en Google Calendar o agenda local."""
+        """Verifica cruces persistidos y, si está configurado, la disponibilidad real."""
+        inicio, fin = _intervalo_agendamiento(fecha_hora, self.duracion_minutos)
+        fecha_hora_calendario = _formato_fecha_hora_calendario(inicio)
+        inicio_iso, fin_iso = inicio.isoformat(), fin.isoformat()
+        ocupado_en_sistema = bool(
+            self.repositorio
+            and self.repositorio.listar_agendamientos_activos(
+                inicio_iso, fin_iso
+            )
+        )
         if self.google_calendar is not None:
-            return self.google_calendar.verificar_disponibilidad(fecha_hora)
-        bloque = self.bloques.get(fecha_hora)
+            try:
+                libre_en_google = self.google_calendar.verificar_disponibilidad(
+                    fecha_hora_calendario
+                )
+            except ErrorGoogleCalendar:
+                if ocupado_en_sistema:
+                    return False
+                raise
+            return not ocupado_en_sistema and libre_en_google
+        if ocupado_en_sistema:
+            return False
+        bloque = self.bloques.get(fecha_hora_calendario)
         if bloque is None:
             return True
         return bloque["estado"] == "LIBRE"
 
-    def obtener_alternativas(self, excluir_fecha: str, limite: int = 2) -> List[str]:
-        """Retorna bloques horarios libres reales distintos a la fecha ocupada."""
+    def obtener_alternativas(
+        self,
+        excluir_fecha: str,
+        limite: int = 2,
+        excluir_horarios: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Propone bloques que no se crucen con citas persistidas ni con Google."""
+        if limite <= 0:
+            return []
+        inicio_ref, _ = _intervalo_agendamiento(
+            excluir_fecha, self.duracion_minutos
+        )
+        excluir_fecha_calendario = _formato_fecha_hora_calendario(inicio_ref)
+        excluidos = set()
+        for horario in excluir_horarios or []:
+            try:
+                inicio_excluido, _ = _intervalo_agendamiento(
+                    str(horario), self.duracion_minutos
+                )
+            except ValueError:
+                continue
+            excluidos.add(_formato_fecha_hora_calendario(inicio_excluido))
         if self.google_calendar is not None:
-            return self.google_calendar.obtener_alternativas(
-                excluir_fecha=excluir_fecha, limite=limite
+            limite_candidatas = max(
+                limite,
+                (
+                    (self.google_calendar.hora_fin_laboral
+                    - self.google_calendar.hora_inicio_laboral)
+                    * 60
+                    // self.duracion_minutos
+                ),
             )
-        alternativas = [
-            fh
-            for fh, info in self.bloques.items()
-            if info["estado"] == "LIBRE" and fh != excluir_fecha
-        ]
-        return alternativas[:limite]
+            candidatas = self.google_calendar.obtener_alternativas(
+                excluir_fecha=excluir_fecha_calendario,
+                limite=limite_candidatas,
+            )
+        else:
+            jornada_ini = inicio_ref.replace(hour=8, minute=0, second=0, microsecond=0)
+            jornada_fin = inicio_ref.replace(hour=18, minute=0, second=0, microsecond=0)
+            paso = timedelta(minutes=self.duracion_minutos)
+            candidatas = []
+            cursor = jornada_ini
+            while cursor + paso <= jornada_fin:
+                etiqueta = cursor.strftime("%Y-%m-%d %H:%M")
+                if etiqueta != excluir_fecha_calendario:
+                    candidatas.append(etiqueta)
+                cursor += paso
+
+        alternativas: List[str] = []
+        _, fin_excluido = _intervalo_agendamiento(
+            excluir_fecha_calendario, self.duracion_minutos
+        )
+        for candidata in candidatas:
+            if candidata in excluidos:
+                continue
+            inicio_candidata, fin_candidata = _intervalo_agendamiento(
+                candidata, self.duracion_minutos
+            )
+            if inicio_candidata < fin_excluido and fin_candidata > inicio_ref:
+                continue
+            if self.verificar_disponibilidad(candidata):
+                alternativas.append(candidata)
+                if len(alternativas) >= limite:
+                    break
+        return alternativas
 
     def cambiar_estado_bloque(
         self, fecha_hora: str, estado: str, cliente: Optional[str] = None
@@ -253,8 +763,16 @@ class EntornoVirtualAtencion:
             promociones_vigentes=self.repositorio.obtener_promociones_vigentes(),
         )
         self.agendaVirtual: Calendario = Calendario(
-            bloques={} if google_calendar is not None else _agenda_local_respaldo(),
+            bloques=(
+                _agenda_local_respaldo()
+                if google_calendar is None and "Supabase" not in self.repositorio.modo_bd
+                else {}
+            ),
             google_calendar=google_calendar,
+            repositorio=self.repositorio,
+            duracion_minutos=(
+                google_calendar.duracion_minutos if google_calendar is not None else 60
+            ),
         )
 
         self.habitantes: List[str] = []
@@ -295,7 +813,14 @@ class EntornoVirtualAtencion:
             id_cliente=id_cliente, nombre=nombre, canal=canal
         )
         perfil["fidelidad"] = fidelidad
-        perfil["historial_interacciones"].append({"rol": "cliente", "texto": texto})
+        texto_historial = re.sub(
+            r"(?<!\d)\+?\d[\d\s().-]{5,18}\d(?!\d)",
+            "[dato numérico oculto]",
+            texto,
+        )
+        perfil["historial_interacciones"].append(
+            {"rol": "cliente", "texto": texto_historial}
+        )
         self.repositorio.guardar_perfil_cliente(perfil)
 
         entrada = self.plataformas.recibir_mensaje_externo(
@@ -313,7 +838,7 @@ class EntornoVirtualAtencion:
         self.eventos_disparados.append(evento)
         self._emitir_traza(
             "EntornoVirtualAtencion -> AgenteVentas",
-            f"eventoLlegadaMensaje({tipo_evento}) | Canal={canal} | '{texto}'",
+            f"eventoLlegadaMensaje({tipo_evento}) | Canal={canal} | mensaje_recibido",
         )
         return evento
 
@@ -382,10 +907,26 @@ class EntornoVirtualAtencion:
             "historico_ofertas": self.tarifasYMargenes.historico_ofertas,
         }
 
-    def consultarCalendario(self, fecha_hora: str) -> Dict[str, Any]:
+    def consultarCalendario(
+        self,
+        fecha_hora: str,
+        alternativas_excluidas: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Retorna respuesta(estado_calendario) para AgenteAgendamientos."""
         disponible = self.agendaVirtual.verificar_disponibilidad(fecha_hora)
-        alternativas = self.agendaVirtual.obtener_alternativas(excluir_fecha=fecha_hora)
+        alternativas: List[str] = []
+        if not disponible:
+            try:
+                alternativas = self.agendaVirtual.obtener_alternativas(
+                    excluir_fecha=fecha_hora,
+                    excluir_horarios=alternativas_excluidas,
+                )
+            except ErrorGoogleCalendar as exc:
+                self._emitir_traza(
+                    "EntornoVirtualAtencion",
+                    "No se pudieron consultar horarios alternativos en Google Calendar "
+                    f"({type(exc).__name__}).",
+                )
         estado_str = "LIBRE" if disponible else "OCUPADO"
         self._emitir_traza(
             "AgenteAgendamientos <-> EntornoVirtualAtencion",
@@ -398,16 +939,285 @@ class EntornoVirtualAtencion:
             "alternativas": alternativas,
         }
 
-    def registrarCitaEnCalendario(
-        self, fecha_hora: str, cliente: str, estado: str = "OCUPADO"
-    ) -> Dict[str, Any]:
-        """Registra de forma efectiva la reserva en agendaVirtual y en BD."""
-        registro = self.agendaVirtual.cambiar_estado_bloque(
-            fecha_hora=fecha_hora, estado=estado, cliente=cliente
+    def validarDatosAgendamiento(self, datos: Dict[str, Any]) -> Dict[str, Any]:
+        """Valida y normaliza los datos mínimos antes de consultar o persistir."""
+        fecha_hora = str(datos.get("fecha_hora", "")).strip()
+        inicio, fin = _intervalo_agendamiento(
+            fecha_hora, self.agendaVirtual.duracion_minutos
         )
+        id_cliente = str(datos.get("id_cliente", "")).strip()
+        nombre = str(datos.get("nombre_cliente", "")).strip()
+        canal = str(datos.get("canal", "")).strip()
+        if not id_cliente or not nombre or not canal:
+            raise ValueError("La cita requiere id_cliente, nombre_cliente y canal.")
+        servicio = str(datos.get("servicio", "")).strip() or None
+        metadata = datos.get("metadata", {})
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        datos_cliente = metadata.get("datos_cliente", {})
+        if isinstance(datos_cliente, dict):
+            datos_cliente_normalizados = validar_datos_cliente_reserva(
+                datos_cliente.get("nombre_cliente", nombre),
+                datos_cliente.get("cedula"),
+                datos_cliente.get("telefono"),
+            )
+            if datos_cliente_normalizados["nombre_cliente"] != nombre:
+                raise ValueError(
+                    "El nombre de la reserva debe coincidir con el dato recopilado."
+                )
+            metadata["datos_cliente"] = datos_cliente_normalizados
+        return {
+            "id_cliente": id_cliente,
+            "nombre_cliente": datos_cliente_normalizados["nombre_cliente"],
+            "canal": canal,
+            "servicio": servicio,
+            "fecha_inicio": inicio.isoformat(),
+            "fecha_fin": fin.isoformat(),
+            "fecha_hora": _formato_fecha_hora_calendario(inicio),
+            "metadata": {
+                "conversation_id": str(datos.get("conversation_id", "")),
+                **metadata,
+            },
+        }
+
+    def registrarAgendamientoPendiente(
+        self, datos: Dict[str, Any], error_google: str
+    ) -> Dict[str, Any]:
+        """Guarda la solicitud como pendiente cuando Google no permite validar."""
+        cita = self.validarDatosAgendamiento(datos)
+        if not cita.get("servicio"):
+            raise ValueError("La cita requiere el servicio cotizado.")
+        metadata = datos.get("metadata", {})
+        datos_cliente = metadata.get("datos_cliente") if isinstance(metadata, dict) else None
+        if not isinstance(datos_cliente, dict):
+            raise ValueError("Faltan los datos completos del cliente para la reserva.")
+        cita["metadata"]["datos_cliente"] = validar_datos_cliente_reserva(
+            datos_cliente.get("nombre_cliente", cita["nombre_cliente"]),
+            datos_cliente.get("cedula"),
+            datos_cliente.get("telefono"),
+        )
+        registro = self.repositorio.registrar_agendamiento(
+            {
+                **cita,
+                "estado": "pendiente",
+                "registrado_en": "solo_supabase",
+                "google_calendar_estado": "error",
+                "google_calendar_error": error_google,
+                "observaciones": (
+                    "Pendiente de confirmación: no se pudo validar la disponibilidad "
+                    "en Google Calendar."
+                ),
+            }
+        )
+        return {"status": "pendiente", **registro}
+
+    def registrarCitaEnCalendario(
+        self,
+        fecha_hora: str,
+        cliente: str,
+        estado: str = "OCUPADO",
+        id_cliente: str = "cliente_001",
+        canal: str = "WhatsApp",
+        servicio: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Persiste la cita y confirma solo después de completar las escrituras."""
+        base = self.validarDatosAgendamiento(
+            {
+                "fecha_hora": fecha_hora,
+                "id_cliente": id_cliente,
+                "nombre_cliente": cliente,
+                "canal": canal,
+                "servicio": servicio,
+                "metadata": metadata or {},
+            }
+        )
+        if not base.get("servicio"):
+            raise ValueError("La cita requiere el servicio cotizado.")
+        metadata_inicial = metadata or {}
+        datos_cliente_inicial = metadata_inicial.get("datos_cliente")
+        if not isinstance(datos_cliente_inicial, dict):
+            raise ValueError("Faltan los datos completos del cliente para la reserva.")
+        datos_cliente_validos = validar_datos_cliente_reserva(
+            datos_cliente_inicial.get("nombre_cliente", base["nombre_cliente"]),
+            datos_cliente_inicial.get("cedula"),
+            datos_cliente_inicial.get("telefono"),
+        )
+        if datos_cliente_validos["nombre_cliente"] != base["nombre_cliente"]:
+            raise ValueError("El nombre de la reserva debe coincidir con el dato recopilado.")
+        base["metadata"]["datos_cliente"] = datos_cliente_validos
+        datos_cliente_reserva = base["metadata"]["datos_cliente"]
+        base["metadata"].update(
+            {
+                clave: valor
+                for clave, valor in (metadata or {}).items()
+                if clave != "datos_cliente"
+            }
+        )
+        base["metadata"]["datos_cliente"] = datos_cliente_reserva
+        base.update(
+            {
+                "estado": "confirmada",
+                "registrado_en": "solo_supabase",
+                "google_calendar_estado": "no_configurado",
+                "google_event_id": None,
+                "google_event_link": None,
+                "google_calendar_error": None,
+                "observaciones": None,
+            }
+        )
+        google_calendar = self.agendaVirtual.google_calendar
+        fecha_hora_normalizada = base["fecha_hora"]
+
+        if google_calendar is None:
+            if not self.agendaVirtual.verificar_disponibilidad(
+                fecha_hora_normalizada
+            ):
+                raise ConflictoAgendamientoError(
+                    "El horario solicitado se cruza con otra cita activa."
+                )
+            registro = self.repositorio.registrar_agendamiento(base)
+        else:
+            try:
+                disponible = self.agendaVirtual.verificar_disponibilidad(
+                    fecha_hora_normalizada
+                )
+            except ErrorGoogleCalendar as exc:
+                pendiente = {
+                    **base,
+                    "estado": "pendiente",
+                    "google_calendar_estado": "error",
+                    "google_calendar_error": str(exc),
+                    "observaciones": "Pendiente: no se pudo validar la disponibilidad externa.",
+                }
+                registro = self.repositorio.registrar_agendamiento(pendiente)
+                return {"status": "pendiente", **registro}
+
+            if not disponible:
+                raise ConflictoAgendamientoError(
+                    "El horario solicitado se cruza con otra cita activa."
+                )
+
+            pendiente = {
+                **base,
+                "estado": "pendiente",
+                "google_calendar_estado": "pendiente",
+                "observaciones": "Reserva en proceso de sincronización con Google Calendar.",
+            }
+            registro = self.repositorio.registrar_agendamiento(pendiente)
+            try:
+                servicio_nombre = str(
+                    self.plataformas.portafolio_servicios.get(servicio, {}).get(
+                        "nombre", servicio
+                    )
+                )
+                evento = google_calendar.crear_evento(
+                    fecha_hora=fecha_hora_normalizada,
+                    cliente=cliente,
+                    titulo=f"{servicio_nombre} — {cliente}",
+                    descripcion=(
+                        f"Servicio: {servicio_nombre}\n"
+                        f"Cliente: {cliente}\n"
+                        f"Teléfono: {datos_cliente_reserva['telefono']}"
+                    ),
+                )
+            except ErrorGoogleCalendar as exc:
+                registro = self.repositorio.actualizar_agendamiento(
+                    str(registro["id"]),
+                    {
+                        "estado": "confirmada",
+                        "registrado_en": "solo_supabase",
+                        "google_calendar_estado": "error",
+                        "google_calendar_error": str(exc),
+                        "observaciones": "Cita guardada en Supabase; Google Calendar no sincronizó.",
+                    },
+                )
+            else:
+                try:
+                    registro = self.repositorio.actualizar_agendamiento(
+                        str(registro["id"]),
+                        {
+                            "estado": "confirmada",
+                            "registrado_en": "supabase_y_google_calendar",
+                            "google_calendar_estado": "sincronizado",
+                            "google_event_id": evento["evento_google_id"],
+                            "google_event_link": evento.get("html_link"),
+                            "google_calendar_error": None,
+                            "observaciones": "Cita sincronizada con Google Calendar.",
+                        },
+                    )
+                except (
+                    httpx.HTTPError,
+                    sqlite3.Error,
+                    RuntimeError,
+                    ValueError,
+                ) as error_actualizacion:
+                    try:
+                        estado_persistido = self.repositorio.obtener_agendamiento(
+                            str(registro["id"])
+                        )
+                    except (httpx.HTTPError, sqlite3.Error, RuntimeError, ValueError):
+                        estado_persistido = None
+
+                    if (
+                        estado_persistido
+                        and estado_persistido.get("estado") == "confirmada"
+                        and estado_persistido.get("google_calendar_estado")
+                        == "sincronizado"
+                        and estado_persistido.get("google_event_id")
+                        == evento["evento_google_id"]
+                    ):
+                        registro = estado_persistido
+                    else:
+                        try:
+                            registro = self.repositorio.actualizar_agendamiento(
+                                str(registro["id"]),
+                                {
+                                    "estado": "pendiente",
+                                    "registrado_en": "solo_supabase",
+                                    "google_calendar_estado": "error",
+                                    "google_event_id": evento["evento_google_id"],
+                                    "google_event_link": evento.get("html_link"),
+                                    "google_calendar_error": (
+                                        "Se creó el evento de Google Calendar, pero no se "
+                                        "pudo verificar su sincronización en Supabase "
+                                        f"({type(error_actualizacion).__name__})."
+                                    ),
+                                    "observaciones": (
+                                        "Pendiente de reconciliación manual. No se eliminó "
+                                        "el evento y no se debe reintentar la sincronización "
+                                        "sin verificar primero su identificador."
+                                    ),
+                                },
+                            )
+                            return {"status": "pendiente", **registro}
+                        except (
+                            httpx.HTTPError,
+                            sqlite3.Error,
+                            RuntimeError,
+                            ValueError,
+                        ) as error_registro:
+                            self._emitir_traza(
+                                "EntornoVirtualAtencion",
+                                "No se pudo persistir la recuperación de sincronización "
+                                f"para evento Google {evento['evento_google_id']} "
+                                f"({type(error_registro).__name__}).",
+                            )
+                            raise error_actualizacion from error_registro
+
+        if registro.get("estado") != "confirmada":
+            raise RuntimeError(
+                "La persistencia no devolvió un agendamiento confirmado."
+            )
+
+        registro_local = {
+            **registro,
+            "estado": "OCUPADO",
+            "cliente": cliente,
+        }
+        self.agendaVirtual.bloques[fecha_hora_normalizada] = registro_local
         self._emitir_traza(
             "AgenteAgendamientos -> EntornoVirtualAtencion",
-            f"administrarCitaYNotificar({fecha_hora}, {estado}) -> ok()",
+            f"administrarCitaYNotificar({fecha_hora_normalizada}, {estado}) -> persistido({registro['registrado_en']})",
         )
         return {"status": "ok", **registro}
 
@@ -453,6 +1263,6 @@ class EntornoVirtualAtencion:
         self.repositorio.registrar_alerta_humana(alerta)
         self._emitir_traza(
             "AgenteCoordinador -> EntornoVirtualAtencion",
-            f"pausarYAlertarHumano(motivo='{motivo_critico}') -> ok(alerta_recibida_por_profesional)",
+            "pausarYAlertarHumano() -> ok(alerta_recibida_por_profesional)",
         )
         return alerta

@@ -5,8 +5,12 @@ interesado, indeciso u hostil) y basado en utilidad.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 from spade.behaviour import CyclicBehaviour, OneShotBehaviour
 from spade.message import Message
@@ -15,8 +19,99 @@ from src.agentes.base_agente import JID_COORDINADOR, AgenteBaseMASML
 from src.comunicacion.fipa_acl import extraer_payload_fipa
 from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
-from src.ml.modelos_ml import ModeloNLPVentas
+from src.ml.modelos_ml import (
+    ModeloNLPVentas,
+    _es_objecion_precio_explicita,
+    normalizar_unidad_comercial,
+)
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.reglas_comerciales import promocion_elegible, validar_datos_cliente_reserva
+
+
+def _es_respuesta_afirmativa(texto: str) -> bool:
+    normalizado = unicodedata.normalize("NFD", texto.casefold())
+    normalizado = "".join(
+        caracter
+        for caracter in normalizado
+        if unicodedata.category(caracter) != "Mn"
+    )
+    if re.search(r"\bno\b", normalizado):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:si|claro|perfecto|de acuerdo|hagamoslo|por favor)\b",
+            normalizado,
+        )
+    )
+
+
+def _nombre_completo_valido(texto: str) -> bool:
+    nombre = " ".join(texto.split())
+    normalizado = unicodedata.normalize("NFD", nombre.casefold())
+    normalizado = "".join(
+        caracter
+        for caracter in normalizado
+        if unicodedata.category(caracter) != "Mn"
+    )
+    tokens = re.findall(r"[^\W\d_]+", nombre, flags=re.UNICODE)
+    return len(tokens) >= 2 and normalizado not in {
+        "cliente",
+        "cliente potencial",
+        "cliente empresarial",
+        "anonymous user",
+    }
+
+
+def _es_aceptacion_explicita_cotizacion(texto: str) -> bool:
+    descompuesto = unicodedata.normalize("NFD", texto.lower())
+    texto_normalizado = "".join(
+        caracter
+        for caracter in descompuesto
+        if unicodedata.category(caracter) != "Mn"
+    )
+    if re.search(r"\bno\s+(?:acepto|apruebo|confirmo)\b", texto_normalizado):
+        return False
+    patrones = (
+        r"\b(?:acepto|apruebo|confirmo)\s+(?:la\s+)?"
+        r"(?:cotizacion|propuesta|oferta)\b",
+        r"\bestoy\s+de\s+acuerdo\s+con\s+(?:la\s+)?"
+        r"(?:cotizacion|propuesta|oferta)\b",
+        r"\b(?:acepto|apruebo)\s+(?:el\s+)?(?:precio|presupuesto)\b",
+        r"\b(?:cotizacion|propuesta|oferta)\s+(?:esta\s+)?"
+        r"(?:aceptada|aprobada|confirmada)\b",
+    )
+    return any(re.search(patron, texto_normalizado) for patron in patrones)
+
+
+def _es_rechazo_horario(texto: str) -> bool:
+    descompuesto = unicodedata.normalize("NFD", texto.casefold())
+    normalizado = "".join(
+        caracter
+        for caracter in descompuesto
+        if unicodedata.category(caracter) != "Mn"
+    )
+    return bool(
+        re.search(
+            r"\bno\s+me\s+(?:sirve|conviene)\b.{0,24}\b(?:hora|horario|opcion|alternativa)\b"
+            r"|\b(?:hora|horario|opcion|alternativa)\b.{0,24}\bno\s+me\s+(?:sirve|conviene)\b"
+            r"|\bno\s+me\s+(?:sirve|conviene)\b.{0,24}\b(?:las?\s+)?\d{1,2}\b"
+            r"|\bningun[oa]s?\s+de\s+(?:esas|esos)\s+(?:horas|horarios|opciones|alternativas)\b",
+            normalizado,
+        )
+    )
+
+
+def _fecha_hora_ya_paso(valor: str) -> bool:
+    try:
+        fecha_hora = datetime.fromisoformat(valor.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    zona = ZoneInfo("America/Bogota")
+    if fecha_hora.tzinfo is None:
+        fecha_hora = fecha_hora.replace(tzinfo=zona)
+    else:
+        fecha_hora = fecha_hora.astimezone(zona)
+    return fecha_hora <= datetime.now(zona)
 
 
 @dataclass
@@ -119,10 +214,19 @@ class AgenteVentas(AgenteBaseMASML):
     # ACCIONES DEL DIAGRAMA DE CLASES MAS-ML
     # ------------------------------------------------------------------
     def interpretarLenguajeNatural(
-        self, texto: str, tipo_evento: Optional[str] = None
+        self,
+        texto: str,
+        tipo_evento: Optional[str] = None,
+        campos_pendientes: Optional[list[str]] = None,
+        parametros_acumulados: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Clasifica intención y detecta tonoCliente usando ModeloNLPVentas."""
-        analisis = self.modelo_nlp.analizar_mensaje(texto=texto, contexto_tipo=tipo_evento)
+        analisis = self.modelo_nlp.analizar_mensaje(
+            texto=texto,
+            contexto_tipo=tipo_evento,
+            campos_pendientes=campos_pendientes,
+            parametros_acumulados=parametros_acumulados,
+        )
         self.creencias["mensajesEntrantes"].append(texto)
         self.creencias["historialCharla"].append({"rol": "cliente", "texto": texto})
         self.creencias["tonoCliente"] = analisis["tono_cliente"]
@@ -182,19 +286,99 @@ class AgenteVentas(AgenteBaseMASML):
         return res
 
     def presentarPromocionAlCliente(
-        self, descuento_porciento: float, canal: str, id_cliente: str, valor_final: float
+        self,
+        descuento_porciento: float,
+        canal: str,
+        id_cliente: str,
+        valor_final: float,
+        conversation_id: Optional[str] = None,
+        codigo_promocion: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Comunica al cliente la promocion previamente autorizada por el Coordinador."""
+        """Vuelve a validar cotización y regla antes de comunicar una promoción."""
+        self.creencias["promocionAprobada"] = None
+        contexto = self.entorno.perfilesClientes.obtener_estado_conversacion(
+            id_cliente, conversation_id
+        )
+        perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
+        parametros = self.entorno.perfilesClientes.obtener_parametros_cotizacion(
+            id_cliente, conversation_id
+        )
+        valor_cotizado = (
+            contexto.get("ultima_cotizacion")
+            if conversation_id
+            else perfil.get("ultima_cotizacion")
+        )
+        promocion = next(
+            (
+                item
+                for item in self.entorno.tarifasYMargenes.promociones_vigentes
+                if str(item.get("codigo", "")) == str(codigo_promocion or "")
+            ),
+            None,
+        )
+        cantidad = parametros.get("cantidad_unidades")
+        elegible = bool(
+            promocion
+            and cantidad is not None
+            and promocion_elegible(
+                promocion,
+                str(parametros.get("tipo_servicio", "")),
+                cantidad,
+                int(parametros["complejidad"])
+                if parametros.get("complejidad") is not None
+                else None,
+                canal=canal,
+            )
+        )
+        try:
+            valor_cotizado_num = float(valor_cotizado)
+            descuento = float(descuento_porciento)
+            valor_final_esperado = round(
+                valor_cotizado_num * (1.0 - descuento / 100.0), -2
+            )
+            valor_final_num = float(valor_final)
+        except (TypeError, ValueError):
+            valor_cotizado_num = 0.0
+            descuento = 0.0
+            valor_final_esperado = 0.0
+            valor_final_num = -1.0
+        limite_autorizado = min(
+            float(promocion.get("descuento_max", 0)) if promocion else 0.0,
+            self.entorno.tarifasYMargenes.descuento_maximo_permitido,
+        )
+        autorizada = (
+            elegible
+            and self.entorno.perfilesClientes.tiene_cotizacion(
+                id_cliente, conversation_id
+            )
+            and not self.entorno.perfilesClientes.cotizacion_aprobada(
+                id_cliente, conversation_id
+            )
+            and 0 < descuento <= limite_autorizado
+            and round(valor_final_num, -2) == valor_final_esperado
+        )
+        if not autorizada:
+            moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
+            mensaje_base = (
+                f"La cotización formal vigente es de ${valor_cotizado_num:,.0f} "
+                f"{moneda}. Mantenemos esa tarifa porque no se pudo validar una "
+                "promoción aplicable."
+            )
+            return self.responderLenguajeNatural(
+                "mantener_tarifa_base", canal, id_cliente, mensaje_base
+            )
+
         moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
-        self.creencias["promocionAprobada"] = descuento_porciento
+        self.creencias["promocionAprobada"] = descuento
         mensaje = (
-            f"Tenemos una oferta especial autorizada para ti: {descuento_porciento:.0f}% de descuento, "
-            f"quedando el valor final en ${valor_final:,.0f} {moneda}. Agendamos tu cita de inicio?"
+            f"Hay una promoción autorizada para esta cotización: {descuento:g}% "
+            f"de descuento, con un valor final de ${valor_final_esperado:,.0f} "
+            f"{moneda}. ¿Deseas continuar?"
         )
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": mensaje}
         )
-        pct_tag = f"descuento_{int(round(descuento_porciento))}_porciento"
+        pct_tag = f"descuento_{descuento:g}_porciento"
         self.registrar_accion(f"presentarPromocionAlCliente({pct_tag})", f"canal={canal}")
         return self.entorno.registrarRespuestaEntorno(
             accion=f"presentarPromocionAlCliente({pct_tag})",
@@ -238,6 +422,8 @@ class AgenteVentas(AgenteBaseMASML):
         texto = str(payload_evt.get("texto", ""))
         canal = str(payload_evt.get("canal", "WhatsApp"))
         id_cliente = str(payload_evt.get("id_cliente", "cliente_001"))
+        contexto_id_raw = payload_evt.get("contexto_conversacion_id")
+        contexto_id = str(contexto_id_raw) if contexto_id_raw else None
 
         perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(
             id_cliente, canal=canal
@@ -246,20 +432,56 @@ class AgenteVentas(AgenteBaseMASML):
         if not perfil.get("automatizacion_activa", True):
             self.registrar_accion(
                 "atencionPausadaHumanInTheLoop()",
-                f"cliente={id_cliente} | canal={canal}",
+                f"canal={canal}",
             )
             self.marcar_ciclo_completado(
                 {"resultado": "en_atencion_humana", "id_cliente": id_cliente, "canal": canal}
             )
             return
 
-        analisis = self.interpretarLenguajeNatural(texto=texto, tipo_evento=tipo_evento)
+        contexto_conversacion = (
+            self.entorno.perfilesClientes.obtener_estado_conversacion(
+                id_cliente, contexto_id
+            )
+        )
+        estado_reserva = dict(contexto_conversacion.get("estado_reserva", {}))
+        parametros_perfil = self.entorno.perfilesClientes.obtener_parametros_cotizacion(
+            id_cliente, contexto_id
+        )
+        esperando_parametros = bool(
+            contexto_conversacion.get(
+                "esperando_parametros_cotizacion",
+                perfil.get("esperando_parametros_cotizacion", False)
+                if not contexto_id
+                else False,
+            )
+        )
+        campos_pendientes = (
+            self.entorno.perfilesClientes.obtener_campos_cotizacion_pendientes(
+                id_cliente, contexto_id
+            )
+            if esperando_parametros
+            else []
+        )
+        if esperando_parametros and not campos_pendientes:
+            campos_pendientes = self.modelo_nlp.campos_cotizacion_pendientes(
+                parametros_perfil
+            )
+        contexto_nlp = tipo_evento
+        if estado_reserva.get("paso") == "esperando_horario":
+            contexto_nlp = "solicitud_agendamiento"
+        analisis = self.interpretarLenguajeNatural(
+            texto=texto,
+            tipo_evento=contexto_nlp,
+            campos_pendientes=campos_pendientes,
+            parametros_acumulados=parametros_perfil,
+        )
         self.entorno.perfilesClientes.actualizar_perfil(
             id_cliente, tono_actual=analisis["tono_cliente"]
         )
 
-        # Caso 4: Tono hostil o reclamo critico -> alerta_caso_critico
-        if analisis["tono_cliente"] == "hostil" or analisis["intencion"] == "reclamo_critico":
+        # Solo señales verificadas o una predicción crítica suficientemente fuerte escalan.
+        if analisis.get("escalamiento_humano", False):
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
                 performativa="INFORM",
@@ -275,31 +497,150 @@ class AgenteVentas(AgenteBaseMASML):
             )
             return
 
-        # Alternativa C: Cliente declina oferta y rechaza la compra
-        if (
-            tipo_evento in {"rechazo_compra", "rechazo_compra_no_interesado"}
-            or analisis["intencion"] == "rechazo_compra"
-        ):
-            await self.escalarCasoACoordinador(
-                comportamiento=comportamiento,
-                performativa="INFORM",
-                predicado="(cliente_declina_oferta motivo: excede_presupuesto)",
-                protocolo="FIPA-Request",
-                conversation_id=conversation_id,
-                payload_extra={
-                    "id_cliente": id_cliente,
-                    "canal": canal,
-                    "motivo_rechazo": texto or "excede_presupuesto",
-                },
+        if estado_reserva.get("paso") in {
+            "nombre_cliente",
+            "cedula",
+            "telefono",
+        }:
+            paso = str(estado_reserva["paso"])
+            if paso == "nombre_cliente":
+                if not _nombre_completo_valido(texto):
+                    mensaje = "Para la reserva necesito tu nombre y apellido. ¿Cuál es tu nombre completo?"
+                    res = self.responderLenguajeNatural(
+                        "nombre_completo_requerido", canal, id_cliente, mensaje
+                    )
+                    self.marcar_ciclo_completado(
+                        {"resultado": "datos_cliente_pendientes", "envio": res}
+                    )
+                    return
+                estado_reserva["nombre_cliente"] = " ".join(texto.split())
+                estado_reserva["paso"] = "cedula"
+                mensaje = "Gracias. ¿Cuál es tu número de identificación?"
+            elif paso == "cedula":
+                identificacion = re.sub(r"\D", "", texto)
+                if not 5 <= len(identificacion) <= 15:
+                    mensaje = "La identificación debe tener entre 5 y 15 dígitos. ¿Puedes verificarla?"
+                    res = self.responderLenguajeNatural(
+                        "identificacion_requerida", canal, id_cliente, mensaje
+                    )
+                    self.marcar_ciclo_completado(
+                        {"resultado": "datos_cliente_pendientes", "envio": res}
+                    )
+                    return
+                estado_reserva["cedula"] = identificacion
+                estado_reserva["paso"] = "telefono"
+                mensaje = "¿Cuál es tu teléfono de contacto, incluyendo el indicativo si aplica?"
+            else:
+                try:
+                    datos_validos = validar_datos_cliente_reserva(
+                        estado_reserva.get("nombre_cliente"),
+                        estado_reserva.get("cedula"),
+                        texto,
+                    )
+                except ValueError:
+                    mensaje = "El teléfono debe tener entre 7 y 15 dígitos. ¿Puedes verificarlo?"
+                    res = self.responderLenguajeNatural(
+                        "telefono_requerido", canal, id_cliente, mensaje
+                    )
+                    self.marcar_ciclo_completado(
+                        {"resultado": "datos_cliente_pendientes", "envio": res}
+                    )
+                    return
+                estado_reserva.update(datos_validos)
+                estado_reserva["paso"] = "esperando_horario"
+                self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                    id_cliente, contexto_id, {"estado_reserva": estado_reserva}
+                )
+                fecha_pendiente = str(
+                    parametros_perfil.get("fecha_agendamiento_pendiente", "")
+                ).strip()
+                if not fecha_pendiente:
+                    fecha_pendiente = str(
+                        parametros_perfil.get("fecha_hora", "")
+                    ).strip()
+                if fecha_pendiente and not _fecha_hora_ya_paso(fecha_pendiente):
+                    tipo_evento = "solicitud_agendamiento"
+                else:
+                    fecha_solicitada = parametros_perfil.get(
+                        "fecha_agendamiento_fecha"
+                    )
+                    mensaje = (
+                        f"Ya tengo el día {fecha_solicitada}. ¿A qué hora te gustaría la cita?"
+                        if fecha_solicitada
+                        else "Tus datos quedaron registrados para esta conversación. ¿Qué día y hora te gustaría reservar?"
+                    )
+                    res = self.responderLenguajeNatural(
+                        "fecha_agendamiento_requerida",
+                        canal,
+                        id_cliente,
+                        mensaje,
+                    )
+                    self.marcar_ciclo_completado(
+                        {
+                            "resultado": "fecha_agendamiento_requerida",
+                            "envio": res,
+                        }
+                    )
+                    return
+            self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                id_cliente, contexto_id, {"estado_reserva": estado_reserva}
             )
-            return
+            if paso != "telefono":
+                res = self.responderLenguajeNatural(
+                    "datos_cliente_requeridos", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {"resultado": "datos_cliente_pendientes", "envio": res}
+                )
+                return
 
         # Si el cliente venia de parametros incompletos y responde con datos faltantes
         parametros_extraidos = dict(analisis.get("parametros_extraidos", {}))
-        esperando_params = bool(perfil.get("esperando_parametros_cotizacion", False))
+        alternativas_ofrecidas = list(
+            estado_reserva.get("alternativas_ofrecidas", [])
+        )
+        if (
+            estado_reserva.get("paso") == "esperando_horario"
+            and alternativas_ofrecidas
+            and _es_rechazo_horario(texto)
+        ):
+            rechazadas = list(estado_reserva.get("alternativas_rechazadas", []))
+            horario_rechazado = str(
+                parametros_extraidos.get("fecha_hora", "")
+            ).strip()
+            para_rechazar = (
+                [horario_rechazado]
+                if horario_rechazado in alternativas_ofrecidas
+                else alternativas_ofrecidas
+            )
+            estado_reserva["alternativas_rechazadas"] = list(
+                dict.fromkeys([*rechazadas, *para_rechazar])
+            )
+            estado_reserva["alternativas_ofrecidas"] = []
+            self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                id_cliente, contexto_id, {"estado_reserva": estado_reserva}
+            )
+            mensaje = "Entendido. ¿Qué otro día y horario te conviene?"
+            res = self.responderLenguajeNatural(
+                "horario_alternativo_rechazado", canal, id_cliente, mensaje
+            )
+            self.marcar_ciclo_completado(
+                {"resultado": "horario_alternativo_rechazado", "envio": res}
+            )
+            return
+
+        esperando_params = esperando_parametros
         tiene_nuevos_params = any(
             k in parametros_extraidos
-            for k in ("tipo_servicio", "cantidad_unidades", "horas_estimadas", "complejidad", "urgencia_dias")
+            for k in (
+                "tipo_servicio",
+                "cantidad_unidades",
+                "horas_estimadas",
+                "sesiones_requeridas",
+                "cantidad_productos",
+                "complejidad",
+                "urgencia_dias",
+            )
         )
 
         # Paso 2 (Cotizacion): Solicitud de cotizacion o respuesta aclaratoria con parametros
@@ -308,115 +649,413 @@ class AgenteVentas(AgenteBaseMASML):
             or analisis["intencion"] == "solicitud_cotizacion"
             or (esperando_params and tiene_nuevos_params)
         ):
-            params_previos = dict(perfil.get("parametros_parciales", {}))
+            params_previos = (
+                self.entorno.perfilesClientes.obtener_parametros_cotizacion(
+                    id_cliente, contexto_id
+                )
+            )
+            parametros_metadata = {
+                clave: valor
+                for clave, valor in dict(
+                    payload_evt.get("parametros_servicio", {})
+                ).items()
+                if valor is not None and valor != ""
+            }
             params = {
+                **parametros_metadata,
                 **params_previos,
                 **parametros_extraidos,
-                **dict(payload_evt.get("parametros_servicio", {})),
             }
-            if esperando_params and tiene_nuevos_params:
-                await self.escalarCasoACoordinador(
-                    comportamiento=comportamiento,
-                    performativa="INFORM",
-                    predicado="(parametros_completados parametros_servicio)",
-                    protocolo="FIPA-Request",
-                    conversation_id=conversation_id,
-                    payload_extra={
-                        "id_cliente": id_cliente,
-                        "canal": canal,
-                        "parametros_servicio": params,
-                    },
-                )
-            else:
-                await self.escalarCasoACoordinador(
-                    comportamiento=comportamiento,
-                    performativa="REQUEST",
-                    predicado="(solicitar_cotizacion_servicio parametros_servicio)",
-                    protocolo="FIPA-Request",
-                    conversation_id=conversation_id,
-                    payload_extra={
-                        "id_cliente": id_cliente,
-                        "canal": canal,
-                        "parametros_servicio": params,
-                    },
-                )
+            fecha_hora_nueva = str(params.get("fecha_hora", "")).strip()
+            if fecha_hora_nueva:
+                if params.get("fecha_hora_pasada") or _fecha_hora_ya_paso(
+                    fecha_hora_nueva
+                ):
+                    self.entorno.perfilesClientes.establecer_fecha_agendamiento_pendiente(
+                        id_cliente, None, contexto_id
+                    )
+                else:
+                    self.entorno.perfilesClientes.establecer_fecha_agendamiento_pendiente(
+                        id_cliente, fecha_hora_nueva, contexto_id
+                    )
+            await self.escalarCasoACoordinador(
+                comportamiento=comportamiento,
+                performativa="REQUEST",
+                predicado="(escalar_caso cotizacion parametros_servicio)",
+                protocolo="FIPA-Request",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "canal": canal,
+                    "contexto_conversacion_id": contexto_id,
+                    "parametros_servicio": params,
+                },
+            )
             return
 
         # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual
-        if tipo_evento == "consulta_servicio" or analisis["intencion"] == "consulta_servicio":
+        if (
+            estado_reserva.get("paso") != "esperando_horario"
+            and (
+                tipo_evento == "consulta_servicio"
+                or analisis["intencion"] == "consulta_servicio"
+            )
+        ):
             res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
             self.marcar_ciclo_completado(
                 {"accion": "catalogo_enviado", "respuesta": res}
             )
             return
 
-        # Caso 2: Objecion de precio / cliente indeciso -> solicita evaluar incentivo
-        if tipo_evento == "objecion_precio" or analisis["intencion"] == "objecion_precio":
-            nivel_indecision = float(
-                payload_evt.get("nivel_indecision", analisis["nivel_indecision"])
+        cotizacion_actual = self.entorno.perfilesClientes.obtener_estado_conversacion(
+            id_cliente, contexto_id
+        )
+        valor_cotizacion = (
+            cotizacion_actual.get("ultima_cotizacion")
+            if contexto_id
+            else perfil.get("ultima_cotizacion")
+        )
+        tiene_cotizacion = self.entorno.perfilesClientes.tiene_cotizacion(
+            id_cliente, contexto_id
+        )
+        cotizacion_aprobada_actual = self.entorno.perfilesClientes.cotizacion_aprobada(
+            id_cliente, contexto_id
+        )
+
+        # La predicción ML nunca basta para iniciar una negociación.
+        if (
+            _es_objecion_precio_explicita(texto)
+            and (tipo_evento == "objecion_precio" or analisis["intencion"] == "objecion_precio")
+        ):
+            parametros_cliente = self.entorno.perfilesClientes.obtener_parametros_cotizacion(
+                id_cliente, contexto_id
             )
-            cotizacion_actual = float(
-                payload_evt.get("cotizacion_actual")
-                or perfil.get("ultima_cotizacion")
-                or 4_500_000.0
+            try:
+                cotizacion_actual_num = float(valor_cotizacion)
+            except (TypeError, ValueError):
+                cotizacion_actual_num = 0.0
+            servicio = str(parametros_cliente.get("tipo_servicio", ""))
+            cantidad = parametros_cliente.get("cantidad_unidades")
+            complejidad = parametros_cliente.get("complejidad")
+            promociones_elegibles = [
+                promo
+                for promo in self.entorno.tarifasYMargenes.promociones_vigentes
+                if promocion_elegible(
+                    promo,
+                    servicio,
+                    cantidad,
+                    int(complejidad) if complejidad is not None else None,
+                    canal=canal,
+                )
+            ] if cantidad is not None else []
+
+            if not tiene_cotizacion or cotizacion_actual_num <= 0:
+                mensaje = (
+                    "Para revisar condiciones comerciales primero necesitamos "
+                    "preparar una cotización formal para el servicio."
+                )
+                res = self.responderLenguajeNatural(
+                    "cotizacion_requerida", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {
+                        "resultado": "cotizacion_requerida",
+                        "fecha_hora": fecha_hora or None,
+                        "envio": res,
+                    }
+                )
+                return
+
+            if cotizacion_aprobada_actual or not promociones_elegibles:
+                moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
+                mensaje = (
+                    f"La cotización formal vigente es de ${cotizacion_actual_num:,.0f} "
+                    f"{moneda}. No hay una promoción autorizada aplicable a este "
+                    "servicio y cantidad; mantenemos la tarifa cotizada."
+                )
+                res = self.responderLenguajeNatural(
+                    "mantener_tarifa_base", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {"resultado": "tarifa_base_mantenida", "envio": res}
+                )
+                return
+
+            promocion = max(
+                promociones_elegibles,
+                key=lambda item: float(item.get("descuento_max", 0)),
             )
-            complejidad = int(
-                payload_evt.get("complejidad")
-                or perfil.get("ultima_complejidad")
-                or 3
-            )
+            nivel_indecision = float(analisis["nivel_indecision"])
             desc_solicitado = float(
                 parametros_extraidos.get("descuento_solicitado_cliente", 0.0)
             )
-            fidelidad = int(payload_evt.get("fidelidad", perfil.get("fidelidad", 1)))
-            if desc_solicitado >= 18.0:
-                nivel_indecision = max(nivel_indecision, 0.96)
-                fidelidad = 3
-
-            pred = (
-                "(evaluar_incentivo nivel_indecision_alto)"
-                if nivel_indecision >= 0.65
-                else "(evaluar_incentivo nivel_indecision_medio)"
-            )
+            fidelidad = int(perfil.get("fidelidad", 1))
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
                 performativa="REQUEST",
-                predicado=pred,
+                predicado="(evaluar_incentivo objecion_precio_verificada)",
                 protocolo="FIPA-Propose",
                 conversation_id=conversation_id,
                 payload_extra={
                     "id_cliente": id_cliente,
                     "canal": canal,
+                    "contexto_conversacion_id": contexto_id,
                     "nivel_indecision": nivel_indecision,
-                    "cotizacion_actual": cotizacion_actual,
-                    "fidelidad_cliente": fidelidad,
+                    "cotizacion_actual": cotizacion_actual_num,
+                    "servicio": servicio,
+                    "cantidad_unidades": cantidad,
                     "complejidad": complejidad,
+                    "fidelidad_cliente": fidelidad,
                     "descuento_solicitado_cliente": desc_solicitado,
+                    "promocion_codigo": promocion["codigo"],
                 },
             )
             return
 
-        # Caso 3: Aceptacion y solicitud de agendamiento
-        if tipo_evento == "aceptar_cotizacion" or analisis["intencion"] == "solicitud_agendamiento":
-            fecha_hora = str(
-                payload_evt.get("fecha_hora")
-                or parametros_extraidos.get("fecha_hora", "2026-11-18 10:00")
+        asentimiento_con_cotizacion = (
+            tiene_cotizacion
+            and not cotizacion_aprobada_actual
+            and _es_respuesta_afirmativa(texto)
+        )
+        if (
+            tipo_evento == "aceptar_cotizacion"
+            or tipo_evento == "solicitud_agendamiento"
+            or estado_reserva.get("paso") == "esperando_horario"
+            or analisis["intencion"] == "solicitud_agendamiento"
+            or _es_aceptacion_explicita_cotizacion(texto)
+            or asentimiento_con_cotizacion
+        ):
+            if (
+                _es_aceptacion_explicita_cotizacion(texto)
+                or asentimiento_con_cotizacion
+                or tipo_evento == "aceptar_cotizacion"
+            ):
+                self.entorno.perfilesClientes.aprobar_ultima_cotizacion(
+                    id_cliente, contexto_id
+                )
+                cotizacion_aprobada_actual = self.entorno.perfilesClientes.cotizacion_aprobada(
+                    id_cliente, contexto_id
+                )
+
+            parametros_cliente = self.entorno.perfilesClientes.obtener_parametros_cotizacion(
+                id_cliente, contexto_id
             )
-            cotizacion_aprobada = bool(
-                payload_evt.get("cotizacion_aprobada", perfil.get("ultima_cotizacion") is not None or True)
+            fecha_hora_actual = str(
+                parametros_extraidos.get("fecha_hora", "")
+            ).strip()
+            fecha_hora_pendiente = str(
+                parametros_cliente.get("fecha_agendamiento_pendiente")
+                or parametros_cliente.get("fecha_hora")
+                or ""
+            ).strip()
+            fecha_parcial = str(
+                parametros_extraidos.get("fecha_agendamiento_fecha")
+                or parametros_cliente.get("fecha_agendamiento_fecha")
+                or ""
+            ).strip()
+            if fecha_hora_actual:
+                fecha_hora = fecha_hora_actual
+                self.entorno.perfilesClientes.establecer_fecha_agendamiento_pendiente(
+                    id_cliente, fecha_hora, contexto_id
+                )
+            else:
+                fecha_hora = fecha_hora_pendiente
+            if fecha_parcial and not fecha_hora_actual:
+                self.entorno.perfilesClientes.actualizar_parametros_cotizacion(
+                    id_cliente,
+                    {
+                        "fecha_agendamiento_fecha": fecha_parcial,
+                        "fecha_hora_falta": True,
+                    },
+                    contexto_id,
+                )
+
+            if fecha_hora and _fecha_hora_ya_paso(fecha_hora):
+                self.entorno.perfilesClientes.establecer_fecha_agendamiento_pendiente(
+                    id_cliente, None, contexto_id
+                )
+                fecha_hora = ""
+                mensaje = (
+                    "La fecha indicada ya pasó. ¿Qué día y hora futuros te gustaría "
+                    "reservar?"
+                )
+                res = self.responderLenguajeNatural(
+                    "fecha_agendamiento_pasada", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {"resultado": "fecha_agendamiento_pasada", "envio": res}
+                )
+                return
+
+            if not tiene_cotizacion:
+                parametros_cotizacion = {
+                    **parametros_cliente,
+                    **{
+                        clave: valor
+                        for clave, valor in parametros_extraidos.items()
+                        if clave
+                        in {
+                            "tipo_servicio",
+                            "cantidad_unidades",
+                            "horas_estimadas",
+                            "sesiones_requeridas",
+                            "cantidad_productos",
+                            "complejidad",
+                            "urgencia_dias",
+                            "fecha_agendamiento_fecha",
+                        }
+                    },
+                }
+                if parametros_cotizacion:
+                    self.entorno.perfilesClientes.actualizar_parametros_cotizacion(
+                        id_cliente, parametros_cotizacion, contexto_id
+                    )
+                mensaje = (
+                    "Para agendar primero necesitamos preparar una cotización. "
+                    "Cuéntame qué servicio necesitas y te ayudamos a cotizarlo."
+                )
+                res = self.responderLenguajeNatural(
+                    "cotizacion_requerida", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {"resultado": "cotizacion_requerida", "envio": res}
+                )
+                return
+
+            if not cotizacion_aprobada_actual:
+                mensaje = (
+                    "Antes de agendar, confirma que aceptas la cotización enviada. "
+                    "Puedes responder: «Acepto la cotización»."
+                )
+                res = self.responderLenguajeNatural(
+                    "cotizacion_aprobacion_requerida", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {
+                        "resultado": "cotizacion_aprobacion_requerida",
+                        "envio": res,
+                    }
+                )
+                return
+
+            if not fecha_hora:
+                self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                    id_cliente,
+                    contexto_id,
+                    {"estado_reserva": {**estado_reserva, "paso": "datos_cliente"}},
+                )
+                if not estado_reserva.get("nombre_cliente"):
+                    estado_reserva["paso"] = "nombre_cliente"
+                    mensaje = (
+                        "Perfecto. Para agendar necesito tu nombre completo. "
+                        "¿Cuál es tu nombre y apellido?"
+                    )
+                elif not estado_reserva.get("cedula"):
+                    estado_reserva["paso"] = "cedula"
+                    mensaje = "¿Cuál es tu número de identificación?"
+                elif not estado_reserva.get("telefono"):
+                    estado_reserva["paso"] = "telefono"
+                    mensaje = "¿Cuál es tu teléfono de contacto?"
+                else:
+                    estado_reserva["paso"] = "esperando_horario"
+                    mensaje = (
+                        f"Ya tengo el día {fecha_parcial}. ¿A qué hora te gustaría la cita?"
+                        if fecha_parcial
+                        else "¿Qué día y hora te gustaría reservar?"
+                    )
+                self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                    id_cliente,
+                    contexto_id,
+                    {"estado_reserva": estado_reserva},
+                )
+                res = self.responderLenguajeNatural(
+                    "datos_reserva_requeridos", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {
+                        "resultado": "datos_reserva_pendientes",
+                        "envio": res,
+                    }
+                )
+                return
+
+            try:
+                datos_cliente_reserva = validar_datos_cliente_reserva(
+                    estado_reserva.get("nombre_cliente"),
+                    estado_reserva.get("cedula"),
+                    estado_reserva.get("telefono"),
+                )
+            except ValueError:
+                for paso, clave, mensaje in (
+                    (
+                        "nombre_cliente",
+                        "nombre_cliente",
+                        "Para agendar necesito tu nombre completo. ¿Cuál es tu nombre y apellido?",
+                    ),
+                    ("cedula", "cedula", "¿Cuál es tu número de identificación?"),
+                    ("telefono", "telefono", "¿Cuál es tu teléfono de contacto?"),
+                ):
+                    if not estado_reserva.get(clave):
+                        estado_reserva["paso"] = paso
+                        self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                            id_cliente,
+                            contexto_id,
+                            {"estado_reserva": estado_reserva},
+                        )
+                        res = self.responderLenguajeNatural(
+                            "datos_reserva_requeridos", canal, id_cliente, mensaje
+                        )
+                        self.marcar_ciclo_completado(
+                            {
+                                "resultado": "datos_reserva_pendientes",
+                                "envio": res,
+                            }
+                        )
+                        return
+                raise
+
+            estado_reserva.update(datos_cliente_reserva)
+            estado_reserva["paso"] = "esperando_horario"
+            self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                id_cliente, contexto_id, {"estado_reserva": estado_reserva}
             )
+            if not fecha_hora:
+                mensaje = (
+                    f"Ya tengo el día {fecha_parcial}. ¿A qué hora te gustaría la cita?"
+                    if fecha_parcial
+                    else "¿Qué día y hora te gustaría reservar?"
+                )
+                res = self.responderLenguajeNatural(
+                    "fecha_agendamiento_requerida", canal, id_cliente, mensaje
+                )
+                self.marcar_ciclo_completado(
+                    {"resultado": "fecha_agendamiento_requerida", "envio": res}
+                )
+                return
+
+            parametros_cliente = self.entorno.perfilesClientes.obtener_parametros_cotizacion(
+                id_cliente, contexto_id
+            )
+            servicio = (
+                parametros_cliente.get("tipo_servicio")
+                or parametros_extraidos.get("tipo_servicio")
+            )
+            rechazadas = estado_reserva.get("alternativas_rechazadas", [])
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
                 performativa="REQUEST",
-                predicado="(solicitar_agendamiento fecha_hora cliente)",
+                predicado="(escalar_caso agendamiento fecha_hora)",
                 protocolo="FIPA-Query",
                 conversation_id=conversation_id,
                 payload_extra={
                     "id_cliente": id_cliente,
-                    "nombre_cliente": payload_evt.get("nombre", perfil.get("nombre", "Cliente Empresarial")),
+                    "nombre_cliente": datos_cliente_reserva["nombre_cliente"],
                     "canal": canal,
                     "fecha_hora": fecha_hora,
-                    "cotizacion_aprobada": cotizacion_aprobada,
+                    "servicio": servicio,
+                    "cotizacion_aprobada": True,
+                    "contexto_conversacion_id": contexto_id,
+                    "alternativas_rechazadas": rechazadas,
                 },
             )
             return
@@ -445,20 +1084,40 @@ class AgenteVentas(AgenteBaseMASML):
             valor_total = float(payload.get("valor_total", 0.0))
             desglose = payload.get("desglose", {})
             moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
-            costo_base = float(
-                desglose.get("costo_base", desglose.get("costo_ingenieria_base_cop", 0))
-            )
-            ajuste = float(
-                desglose.get(
-                    "ajuste_complejidad_urgencia",
-                    desglose.get("ajuste_complejidad_urgencia_cop", 0),
+            if normalizar_unidad_comercial(
+                desglose.get("unidad_cantidad", "")
+            ) == "sesion":
+                cantidad = int(desglose.get("cantidad_unidades", 0))
+                tarifa_unitaria = float(desglose["tarifa_unitaria"])
+                complejidad = desglose.get("complejidad")
+                cantidad_texto = "sesión" if cantidad == 1 else "sesiones"
+                complejidad_texto = (
+                    str(complejidad) if complejidad is not None else "no aplica"
                 )
-            )
-            texto_cot = (
-                f"Tu cotizacion formal estimada para '{desglose.get('servicio', 'Servicio')}' "
-                f"es de ${valor_total:,.0f} {moneda} (Base: ${costo_base:,.0f} {moneda}, "
-                f"Ajuste por alcance/urgencia: ${ajuste:,.0f} {moneda})."
-            )
+                texto_cot = (
+                    f"Tu cotización para '{desglose.get('servicio', 'Servicio')}' es de "
+                    f"${valor_total:,.0f} {moneda}: {cantidad} {cantidad_texto} × "
+                    f"${tarifa_unitaria:,.0f} {moneda}. Complejidad registrada: "
+                    f"{complejidad_texto}; no se aplica un recargo porque no hay una "
+                    "regla de precio por complejidad configurada."
+                )
+            else:
+                costo_base = float(
+                    desglose.get(
+                        "costo_base", desglose.get("costo_ingenieria_base_cop", 0)
+                    )
+                )
+                ajuste = float(
+                    desglose.get(
+                        "ajuste_complejidad_urgencia",
+                        desglose.get("ajuste_complejidad_urgencia_cop", 0),
+                    )
+                )
+                texto_cot = (
+                    f"Tu cotizacion formal estimada para '{desglose.get('servicio', 'Servicio')}' "
+                    f"es de ${valor_total:,.0f} {moneda} (Base: ${costo_base:,.0f} {moneda}, "
+                    f"Ajuste por alcance/urgencia: ${ajuste:,.0f} {moneda})."
+                )
             res = self.responderLenguajeNatural("cotizacion_formal", canal, id_cliente, texto_cot)
             self.marcar_ciclo_completado(
                 {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res}
@@ -479,73 +1138,195 @@ class AgenteVentas(AgenteBaseMASML):
             )
 
         elif perf == "INFORM" and "transferir_promocion" in contenido:
-            descuento = float(payload.get("descuento_porciento", 10.0))
-            valor_final = float(payload.get("valor_con_descuento", 4_050_000.0))
+            try:
+                descuento = float(payload.get("descuento_porciento"))
+                valor_final = float(payload.get("valor_con_descuento"))
+            except (TypeError, ValueError):
+                descuento = 0.0
+                valor_final = 0.0
             res = self.presentarPromocionAlCliente(
                 descuento_porciento=descuento,
                 canal=canal,
                 id_cliente=id_cliente,
                 valor_final=valor_final,
+                conversation_id=(
+                    str(payload["contexto_conversacion_id"])
+                    if payload.get("contexto_conversacion_id")
+                    else None
+                ),
+                codigo_promocion=(
+                    str(payload["promocion_codigo"])
+                    if payload.get("promocion_codigo")
+                    else None
+                ),
             )
             self.marcar_ciclo_completado(
-                {"resultado": "promocion_presentada", "descuento_porciento": descuento, "valor_final": valor_final, "envio": res}
+                {
+                    "resultado": "promocion_presentada"
+                    if self.creencias.get("promocionAprobada") == descuento
+                    else "tarifa_base_mantenida",
+                    "descuento_porciento": descuento,
+                    "valor_final": valor_final,
+                    "envio": res,
+                }
             )
 
         elif perf == "REFUSE" and "descuento_no_viable" in contenido:
-            texto_refuse = (
-                "En este momento no es posible aplicar un descuento adicional sin afectar la "
-                "calidad del servicio, por lo que mantenemos la tarifa base formal."
+            contexto_id = (
+                str(payload["contexto_conversacion_id"])
+                if payload.get("contexto_conversacion_id")
+                else None
             )
+            contexto = self.entorno.perfilesClientes.obtener_estado_conversacion(
+                id_cliente, contexto_id
+            )
+            perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
+            valor_base = (
+                contexto.get("ultima_cotizacion")
+                if contexto_id
+                else perfil.get("ultima_cotizacion")
+            )
+            moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
+            if valor_base is not None:
+                texto_refuse = (
+                    f"La tarifa formal vigente es de ${float(valor_base):,.0f} "
+                    f"{moneda}. No hay una promoción autorizada aplicable, "
+                    "así que mantenemos ese precio."
+                )
+            else:
+                texto_refuse = (
+                    "Para revisar un precio o incentivo primero necesitamos preparar "
+                    "una cotización formal del servicio."
+                )
             res = self.responderLenguajeNatural("mantener_tarifa_base", canal, id_cliente, texto_refuse)
             self.marcar_ciclo_completado(
                 {"resultado": "descuento_rechazado", "envio": res}
             )
 
+        elif perf in {"FAILURE", "REFUSE"} and "error_agendamiento" in contenido:
+            if payload.get("estado") == "pendiente":
+                texto_error = (
+                    "Recibimos tu solicitud de cita, pero no pudimos verificar la disponibilidad "
+                    "del calendario externo. Quedó pendiente y todavía no está confirmada; "
+                    "te contactaremos cuando podamos validarla."
+                )
+                resultado = "agendamiento_pendiente"
+            else:
+                texto_error = (
+                    "No pudimos confirmar la cita porque no se completó su registro. "
+                    "Por favor, intenta nuevamente o contacta directamente al negocio."
+                )
+                resultado = "error_agendamiento"
+            res = self.responderLenguajeNatural(
+                resultado, canal, id_cliente, texto_error
+            )
+            self.marcar_ciclo_completado(
+                {
+                    "resultado": resultado,
+                    "agendamiento_id": payload.get("agendamiento_id"),
+                    "estado": payload.get("estado"),
+                    "google_calendar_estado": payload.get(
+                        "google_calendar_estado", "error"
+                    ),
+                    "envio": res,
+                }
+            )
+
         elif perf == "INFORM" and "reserva_confirmada" in contenido:
             fecha_hora = str(payload.get("fecha_hora", ""))
-            texto_cita = f"Cita confirmada exitosamente para el {fecha_hora}. Te hemos enviado el recordatorio."
+            google_estado = str(payload.get("google_calendar_estado", "error"))
+            contexto_id = (
+                str(payload["contexto_conversacion_id"])
+                if payload.get("contexto_conversacion_id")
+                else None
+            )
+            self.entorno.perfilesClientes.establecer_fecha_agendamiento_pendiente(
+                id_cliente, None, contexto_id
+            )
+            self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                id_cliente,
+                contexto_id,
+                {"estado_reserva": {}},
+            )
+            if google_estado == "sincronizado":
+                texto_cita = (
+                    f"Cita guardada exitosamente y confirmada para el {fecha_hora}. "
+                    "También quedó sincronizada con Google Calendar."
+                )
+            elif google_estado == "error":
+                texto_cita = (
+                    f"Cita guardada exitosamente y confirmada para el {fecha_hora} "
+                    "en la agenda del negocio. "
+                    "No se pudo sincronizar con Google Calendar; la reserva sí quedó "
+                    "persistida en la base de datos."
+                )
+            elif google_estado == "no_configurado":
+                texto_cita = (
+                    f"Cita guardada exitosamente y confirmada para el {fecha_hora} "
+                    "en la agenda del negocio. "
+                    "Google Calendar no está configurado."
+                )
+            else:
+                texto_cita = (
+                    f"Cita guardada exitosamente y confirmada para el {fecha_hora} "
+                    "en la agenda del negocio. "
+                    f"Estado de Google Calendar: {google_estado}."
+                )
             res = self.responderLenguajeNatural("confirmacion_cita", canal, id_cliente, texto_cita)
             self.marcar_ciclo_completado(
-                {"resultado": "cita_confirmada", "fecha_hora": fecha_hora, "envio": res}
+                {
+                    "resultado": "cita_confirmada",
+                    "fecha_hora": fecha_hora,
+                    "agendamiento_id": payload.get("agendamiento_id"),
+                    "registrado_en": payload.get("registrado_en"),
+                    "google_calendar_estado": google_estado,
+                    "google_event_id": payload.get("google_event_id"),
+                    "google_event_link": payload.get("google_event_link"),
+                    "envio": res,
+                }
             )
 
         elif perf == "INFORM" and "ofrecer_alternativas" in contenido:
             alternativas = payload.get("alternativas", [])
+            contexto_id = (
+                str(payload["contexto_conversacion_id"])
+                if payload.get("contexto_conversacion_id")
+                else None
+            )
+            contexto = self.entorno.perfilesClientes.obtener_estado_conversacion(
+                id_cliente, contexto_id
+            )
+            estado_reserva = dict(contexto.get("estado_reserva", {}))
+            rechazadas = list(estado_reserva.get("alternativas_rechazadas", []))
+            horario_intentado = str(payload.get("fecha_hora", "")).strip()
+            if horario_intentado and horario_intentado not in rechazadas:
+                rechazadas.append(horario_intentado)
+            estado_reserva.update(
+                {
+                    "paso": "esperando_horario",
+                    "alternativas_rechazadas": rechazadas,
+                    "alternativas_ofrecidas": list(alternativas),
+                }
+            )
+            self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                id_cliente,
+                contexto_id,
+                {"estado_reserva": estado_reserva},
+            )
             texto_alt = (
                 "El horario solicitado ya se encuentra ocupado en nuestra agenda. "
                 f"Te propongo estos bloques disponibles: {', '.join(alternativas)}."
+                if alternativas
+                else "El horario solicitado está ocupado y no pude verificar alternativas disponibles. "
+                "¿Qué otro día u hora te gustaría consultar?"
             )
             res = self.responderLenguajeNatural("sugerir_horarios_alternativos", canal, id_cliente, texto_alt)
             self.marcar_ciclo_completado(
                 {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res}
             )
 
-        elif perf == "REFUSE" and "fuera_de_alcance_operativo" in contenido:
-            texto_no_viable = (
-                "En este momento esa solicitud se encuentra fuera de nuestro alcance operativo. "
-                "Si deseas consultar otros servicios de nuestro catalogo, con gusto te atiendo."
-            )
-            res = self.responderLenguajeNatural("solicitud_no_viable_cierre", canal, id_cliente, texto_no_viable)
-            self.marcar_ciclo_completado(
-                {
-                    "resultado": "solicitud_no_viable",
-                    "motivo": payload.get("motivo", "fuera_de_alcance_operativo"),
-                    "envio": res,
-                }
-            )
-
-        elif perf == "INFORM" and "confirmar_cierre_conversacion" in contenido:
-            texto_despedida = (
-                "Entendido, registramos el cierre de tu solicitud. "
-                "Muchas gracias por tu tiempo y quedamos atentos si mas adelante necesitas nuestros servicios."
-            )
-            res = self.responderLenguajeNatural("despedida_cordial_y_registro", canal, id_cliente, texto_despedida)
-            self.marcar_ciclo_completado(
-                {"resultado": "oportunidad_descartada", "envio": res}
-            )
-
         elif perf == "CANCEL" and "cancelar_accion" in contenido:
-            self.registrar_accion("pausarChatAutomatico()", f"cliente={id_cliente}")
+            self.registrar_accion("pausarChatAutomatico()")
             await self.enviar_fipa(
                 comportamiento,
                 JID_COORDINADOR,

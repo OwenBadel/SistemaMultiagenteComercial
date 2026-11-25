@@ -271,3 +271,116 @@ SELECT
     1
 FROM generate_series(1, 35) AS g
 ON CONFLICT (negocio_id, id_oferta) DO NOTHING;
+
+
+
+
+-- =============================================================================
+-- Agendamientos persistidos en Supabase y sincronización con Google Calendar.
+-- =============================================================================
+
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE TABLE IF NOT EXISTS public.agendamientos (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    negocio_id TEXT NOT NULL
+        REFERENCES public.negocios(id) ON DELETE CASCADE,
+
+    id_cliente TEXT NOT NULL,
+    nombre_cliente TEXT NOT NULL,
+    canal TEXT NOT NULL,
+
+    servicio TEXT,
+    fecha_inicio TIMESTAMPTZ NOT NULL,
+    fecha_fin TIMESTAMPTZ NOT NULL,
+
+    estado TEXT NOT NULL DEFAULT 'confirmada'
+        CHECK (estado IN (
+            'pendiente',
+            'confirmada',
+            'cancelada',
+            'error'
+        )),
+
+    registrado_en TEXT NOT NULL
+        CHECK (registrado_en IN (
+            'supabase_y_google_calendar',
+            'solo_supabase'
+        )),
+
+    google_calendar_estado TEXT NOT NULL
+        CHECK (google_calendar_estado IN (
+            'pendiente',
+            'sincronizado',
+            'no_configurado',
+            'error'
+        )),
+
+    google_event_id TEXT,
+    google_event_link TEXT,
+    google_calendar_error TEXT,
+
+    observaciones TEXT,
+
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT agendamientos_fecha_valida
+        CHECK (fecha_fin > fecha_inicio)
+);
+
+ALTER TABLE public.agendamientos
+    DROP CONSTRAINT IF EXISTS agendamientos_google_calendar_estado_check;
+
+ALTER TABLE public.agendamientos
+    ADD CONSTRAINT agendamientos_google_calendar_estado_check
+    CHECK (google_calendar_estado IN (
+        'pendiente',
+        'sincronizado',
+        'no_configurado',
+        'error'
+    ));
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'agendamientos_sin_cruce_activo'
+          AND conrelid = 'public.agendamientos'::regclass
+    ) THEN
+        ALTER TABLE public.agendamientos
+            ADD CONSTRAINT agendamientos_sin_cruce_activo
+            EXCLUDE USING gist (
+                negocio_id WITH =,
+                tstzrange(fecha_inicio, fecha_fin, '[)') WITH &&
+            )
+            WHERE (estado IN ('pendiente', 'confirmada'));
+    END IF;
+END;
+$$;
+
+CREATE INDEX IF NOT EXISTS idx_agendamientos_negocio
+ON public.agendamientos (negocio_id);
+
+CREATE INDEX IF NOT EXISTS idx_agendamientos_cliente
+ON public.agendamientos (id_cliente);
+
+CREATE INDEX IF NOT EXISTS idx_agendamientos_fecha
+ON public.agendamientos (negocio_id, fecha_inicio);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agendamientos_google_event
+ON public.agendamientos (google_event_id)
+WHERE google_event_id IS NOT NULL;
+
+-- Seguridad y permisos del backend
+ALTER TABLE public.agendamientos ENABLE ROW LEVEL SECURITY;
+
+GRANT USAGE ON SCHEMA public TO service_role;
+
+GRANT ALL PRIVILEGES
+ON TABLE public.agendamientos
+TO service_role;

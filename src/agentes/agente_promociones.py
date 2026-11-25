@@ -17,6 +17,7 @@ from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
 from src.ml.modelos_ml import ModeloPromocionesKNN
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.reglas_comerciales import promocion_elegible
 
 
 @dataclass
@@ -115,6 +116,7 @@ class AgentePromociones(AgenteBaseMASML):
         complejidad: int = 3,
         fidelidad_cliente: int = 1,
         descuento_solicitado: float = 0.0,
+        descuento_maximo_autorizado: float = 0.0,
     ) -> Dict[str, Any]:
         """
         Predice el porcentaje de descuento optimo usando KNeighborsRegressor (KNN)
@@ -129,10 +131,14 @@ class AgentePromociones(AgenteBaseMASML):
             fidelidad_cliente=fidelidad_cliente,
         )
         descuento_knn = float(pred["descuento_porciento"])
-        descuento_pct = (
+        descuento_recomendado = (
             max(descuento_knn, descuento_solicitado)
             if descuento_solicitado > 0.0
             else descuento_knn
+        )
+        descuento_pct = min(
+            max(descuento_recomendado, 0.0),
+            max(descuento_maximo_autorizado, 0.0),
         )
         margen_base = self.entorno.tarifasYMargenes.margen_base_estimado
         factor = max(0.05, 1.0 - descuento_pct / 100.0)
@@ -193,34 +199,102 @@ class AgentePromociones(AgenteBaseMASML):
         payload = extraer_payload_fipa(msg)
 
         if perf == "REQUEST":
-            cotizacion_actual = float(payload.get("cotizacion_actual", 4_500_000.0))
+            id_cliente = str(payload.get("id_cliente", ""))
+            contexto_id = payload.get("contexto_conversacion_id")
+            try:
+                cotizacion_actual = float(payload.get("cotizacion_actual"))
+                cantidad = int(
+                    payload.get("cantidad_unidades", payload.get("cantidad"))
+                )
+                complejidad = (
+                    int(payload["complejidad"])
+                    if payload.get("complejidad") is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                cotizacion_actual = 0.0
+                cantidad = 0
+                complejidad = None
+            codigo = str(payload.get("promocion_codigo", "")).strip()
+            promocion = next(
+                (
+                    item
+                    for item in self.entorno.tarifasYMargenes.promociones_vigentes
+                    if str(item.get("codigo", "")) == codigo
+                ),
+                None,
+            )
+            cotizacion_vigente = self.entorno.perfilesClientes.tiene_cotizacion(
+                id_cliente, str(contexto_id) if contexto_id else None
+            )
+            cotizacion_aprobada = self.entorno.perfilesClientes.cotizacion_aprobada(
+                id_cliente, str(contexto_id) if contexto_id else None
+            )
+            if (
+                cotizacion_actual <= 0
+                or not cotizacion_vigente
+                or cotizacion_aprobada
+                or not promocion
+                or not promocion_elegible(
+                    promocion,
+                    str(payload.get("servicio", "")),
+                    cantidad,
+                    complejidad,
+                    canal=str(payload.get("canal", "")),
+                )
+            ):
+                await self.enviar_fipa(
+                    comportamiento,
+                    JID_COORDINADOR,
+                    "REFUSE",
+                    "(motivo: regla_comercial_no_autoriza)",
+                    protocolo="FIPA-Propose",
+                    conversation_id=conv_id,
+                    payload_extra={
+                        "id_cliente": id_cliente,
+                        "canal": payload.get("canal", "WhatsApp"),
+                        "contexto_conversacion_id": contexto_id,
+                    },
+                )
+                return
+
             nivel_indecision = float(payload.get("nivel_indecision", 0.72))
-            complejidad = int(payload.get("complejidad", 3))
+            complejidad = int(payload.get("complejidad") or 3)
             fidelidad = int(payload.get("fidelidad_cliente", 1))
             descuento_solicitado = float(payload.get("descuento_solicitado_cliente", 0.0))
 
             self.creencias["solicitudCoordinador"] = payload
             self.creencias["nivelIndecision"] = nivel_indecision
 
-            await self.enviar_fipa(
-                comportamiento,
-                JID_COORDINADOR,
-                "AGREE",
-                "(calcular_descuento cotizacion_actual)",
-                protocolo="FIPA-Propose",
-                conversation_id=conv_id,
-                payload_extra={"id_cliente": payload.get("id_cliente", "cliente_001")},
-            )
-
             datos_entorno = self.entorno.consultarHistoricoYMargenes(cotizacion_actual)
             self.validarPromocionesVigentes(datos_entorno)
+            limite_promocion = min(
+                float(promocion["descuento_max"]),
+                self.entorno.tarifasYMargenes.descuento_maximo_permitido,
+            )
             propuesta = self.calcularMargenDescuento(
                 cotizacion_actual=cotizacion_actual,
                 nivel_indecision=nivel_indecision,
                 complejidad=complejidad,
                 fidelidad_cliente=fidelidad,
                 descuento_solicitado=descuento_solicitado,
+                descuento_maximo_autorizado=limite_promocion,
             )
+            if propuesta["descuento_porciento"] <= 0:
+                await self.enviar_fipa(
+                    comportamiento,
+                    JID_COORDINADOR,
+                    "REFUSE",
+                    "(motivo: descuento_no_autorizado)",
+                    protocolo="FIPA-Propose",
+                    conversation_id=conv_id,
+                    payload_extra={
+                        "id_cliente": id_cliente,
+                        "canal": payload.get("canal", "WhatsApp"),
+                        "contexto_conversacion_id": contexto_id,
+                    },
+                )
+                return
             await self.emitirPropuestaACoordinador(
                 comportamiento=comportamiento,
                 propuesta=propuesta,

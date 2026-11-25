@@ -107,7 +107,7 @@ class AgenteBaseMASML(Agent):
             conversation_id=conversation_id,
             payload_extra=payload_extra,
         )
-        self.monitor.registrar_mensaje_fipa(msg)
         await comportamiento.send(msg)
+        self.monitor.registrar_mensaje_fipa(msg)
         return msg
 

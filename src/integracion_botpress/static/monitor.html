@@ -498,6 +498,8 @@
     let ultimoEstado = null;
     let pollingActivo = true;
     let timerPolling = null;
+    let claveAdminEnMemoria = null;
+    let intentoAutenticacionRealizado = false;
 
     function escaparHtml(texto) {
       const div = document.createElement('div');
@@ -600,9 +602,39 @@
       ).join('');
     }
 
-    async function cargarEstado() {
+    async function cargarEstado(forzarAutenticacion = false) {
+      if (!claveAdminEnMemoria) {
+        if (forzarAutenticacion) intentoAutenticacionRealizado = false;
+        if (intentoAutenticacionRealizado) return;
+
+        intentoAutenticacionRealizado = true;
+        claveAdminEnMemoria = window.prompt(
+          'Clave administrativa para consultar el estado del sistema:'
+        );
+        if (!claveAdminEnMemoria) {
+          const apiBadge = document.getElementById('badge-api');
+          apiBadge.textContent = 'Autenticación administrativa requerida';
+          apiBadge.className = 'etiqueta etiqueta-err';
+          return;
+        }
+      }
+
       try {
-        const res = await fetch('/api/estado');
+        const res = await fetch('/api/estado', {
+          headers: { 'X-Admin-API-Key': claveAdminEnMemoria }
+        });
+        if (!res.ok) {
+          claveAdminEnMemoria = null;
+          intentoAutenticacionRealizado = true;
+          const apiBadge = document.getElementById('badge-api');
+          apiBadge.textContent = res.status === 503
+            ? 'Autenticación administrativa no configurada'
+            : res.status === 401
+              ? 'Credenciales administrativas inválidas'
+              : 'No se pudo cargar el estado';
+          apiBadge.className = 'etiqueta etiqueta-err';
+          return;
+        }
         const data = await res.json();
         ultimoEstado = data;
 
@@ -632,11 +664,30 @@
     }
 
     async function reactivarCliente(idCliente) {
-      await fetch('/api/humano/reactivar', {
+      if (!claveAdminEnMemoria) {
+        claveAdminEnMemoria = window.prompt(
+          'Clave administrativa para reactivar este perfil:'
+        );
+        if (!claveAdminEnMemoria) return;
+        intentoAutenticacionRealizado = true;
+      }
+
+      const res = await fetch('/api/humano/reactivar', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-API-Key': claveAdminEnMemoria
+        },
         body: JSON.stringify({ id_cliente: idCliente })
       });
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 503) {
+          claveAdminEnMemoria = null;
+          intentoAutenticacionRealizado = true;
+        }
+        window.alert(`No se pudo reactivar el perfil (HTTP ${res.status}).`);
+        return;
+      }
       await cargarEstado();
     }
 
@@ -645,7 +696,7 @@
       const btn = document.getElementById('btn-polling');
       if (pollingActivo) {
         btn.textContent = 'Pausar refresco';
-        cargarEstado();
+        cargarEstado(true);
         timerPolling = setInterval(cargarEstado, 2000);
       } else {
         btn.textContent = 'Reanudar refresco';

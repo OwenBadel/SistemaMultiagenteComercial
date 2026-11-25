@@ -16,6 +16,7 @@ class ConfiguracionBotpress:
     """Parametros del servidor HTTP conectado con Botpress, Supabase y Google Calendar."""
 
     botpress_api_key: str = ""
+    human_reactivation_api_key: str = ""
     owner_whatsapp_number: str = ""
     supabase_url: str = ""
     supabase_key: str = ""
@@ -37,6 +38,9 @@ class ConfiguracionBotpress:
 
         return cls(
             botpress_api_key=os.getenv("BOTPRESS_API_KEY", ""),
+            human_reactivation_api_key=os.getenv(
+                "HUMAN_REACTIVATION_API_KEY", ""
+            ),
             owner_whatsapp_number=os.getenv("OWNER_WHATSAPP_NUMBER", ""),
             supabase_url=os.getenv("SUPABASE_URL", ""),
             supabase_key=os.getenv("SUPABASE_KEY", ""),
@@ -59,4 +63,12 @@ class ConfiguracionBotpress:
         """Indica si hay credenciales listas para Google Calendar API v3."""
         return bool(
             self.google_calendar_id.strip() and self.google_service_account_json.strip()
+        )
+
+    @property
+    def google_calendar_configurado(self) -> bool:
+        """Indica que se intentó configurar Calendar, incluso con datos incompletos."""
+        return bool(
+            self.google_calendar_id.strip()
+            or self.google_service_account_json.strip()
         )
