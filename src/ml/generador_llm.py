@@ -64,13 +64,13 @@ class GeneradorDialogoGemini:
     def __init__(
         self,
         api_key: str = "",
-        modelo: str = "gemini-2.5-flash",
+        modelo: str = "gemini-3-flash-preview",
         timeout_segundos: float = 4.0,
         http_client: Optional[httpx.Client] = None,
         reloj: Callable[[], float] = time.monotonic,
     ) -> None:
         self.api_key = (api_key or "").strip()
-        self.modelo = (modelo or "gemini-2.5-flash").strip()
+        self.modelo = (modelo or "gemini-3-flash-preview").strip()
         self.timeout_segundos = max(0.5, float(timeout_segundos or 4.0))
         self._http_client = http_client
         self._reloj = reloj
@@ -195,7 +195,8 @@ class GeneradorDialogoGemini:
             "contents": [{"role": "user", "parts": [{"text": prompt_usuario}]}],
             "generationConfig": {
                 "temperature": 0.65,
-                "maxOutputTokens": 260,
+                "maxOutputTokens": 1024,
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
         headers = {
