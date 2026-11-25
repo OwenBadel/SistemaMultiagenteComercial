@@ -79,6 +79,10 @@ class PeticionMensajeBotpress(BaseModel):
     texto: Optional[str] = None
     text: Optional[str] = None
     mensaje: Optional[str] = None
+    message: Optional[str] = None
+    input: Optional[str] = None
+    query: Optional[str] = None
+    content: Optional[str] = None
     tipo_evento_sugerido: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -104,13 +108,30 @@ class PeticionMensajeBotpress(BaseModel):
             fuente_identidad = "conversationId"
             alcance_identidad = "conversacion"
         else:
-            id_final = ""
-            fuente_identidad = ""
-            alcance_identidad = ""
+            id_final = f"botpress:{canal_namespace}:cliente_web"
+            fuente_identidad = "fallback_web"
+            alcance_identidad = "conversacion"
+
         nombre_final = (
             self.nombre or self.userName or f"{canal_final} Cliente"
         ).strip()
-        texto_final = (self.texto or self.text or self.mensaje or "").strip()
+        texto_final = (
+            self.texto
+            or self.text
+            or self.mensaje
+            or self.message
+            or self.input
+            or self.query
+            or self.content
+            or ""
+        ).strip()
+        if not texto_final and isinstance(self.metadata, dict):
+            texto_final = str(
+                self.metadata.get("text")
+                or self.metadata.get("texto")
+                or self.metadata.get("message")
+                or ""
+            ).strip()
         return {
             "canal": canal_final,
             "id_cliente": id_final,
@@ -202,6 +223,11 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
             authorization,
         )
         datos = req.normalizar()
+        print(
+            f"[BOTPRESS HTTP] Peticion entrante: canal='{datos['canal']}', "
+            f"id_cliente='{datos['id_cliente']}', nombre='{datos['nombre']}', "
+            f"texto='{datos['texto']}' (fuente: {datos['fuente_identidad']})"
+        )
         if datos["fuente_identidad"] == "userId":
             user_id_legacy = _normalizar_identificador(req.userId)
             perfil_legacy = (
