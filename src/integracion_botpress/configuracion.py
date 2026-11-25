@@ -25,6 +25,9 @@ class ConfiguracionBotpress:
     google_calendar_id: str = ""
     google_service_account_json: str = ""
     google_timezone: str = "America/Bogota"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_timeout_seconds: float = 4.0
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -49,9 +52,17 @@ class ConfiguracionBotpress:
             google_calendar_id=os.getenv("GOOGLE_CALENDAR_ID", ""),
             google_service_account_json=os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", ""),
             google_timezone=os.getenv("GOOGLE_TIMEZONE", "America/Bogota"),
+            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            gemini_timeout_seconds=float(os.getenv("GEMINI_TIMEOUT_SECONDS", "4.0")),
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8000")),
         )
+
+    @property
+    def usa_gemini(self) -> bool:
+        """Indica si hay una API key configurada para redaccion natural con Gemini."""
+        return bool(self.gemini_api_key.strip())
 
     @property
     def usa_supabase(self) -> bool:

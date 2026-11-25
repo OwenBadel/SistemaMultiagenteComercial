@@ -353,7 +353,9 @@ class AgenteCotizaciones(AgenteBaseMASML):
     ) -> None:
         perf = (msg.get_metadata("performative") or "").upper()
         conv_id = msg.get_metadata("conversation_id") or msg.thread or "conv-default"
-        if perf != "REQUEST":
+        contenido = msg.body or ""
+        es_actualizacion = perf == "INFORM" and "actualizar_parametros" in contenido
+        if perf != "REQUEST" and not es_actualizacion:
             return
 
         payload = extraer_payload_fipa(msg)
@@ -362,16 +364,17 @@ class AgenteCotizaciones(AgenteBaseMASML):
         )
         payload["parametros_servicio"] = parametros
 
-        # Respuesta inmediata AGREE según Diagrama de Secuencia 1
-        await self.enviar_fipa(
-            comportamiento,
-            JID_COORDINADOR,
-            "AGREE",
-            "(calcular_costo parametros_servicio)",
-            protocolo="FIPA-Request",
-            conversation_id=conv_id,
-            payload_extra={"id_cliente": payload.get("id_cliente", "cliente_001")},
-        )
+        # Respuesta inmediata AGREE según Diagrama de Secuencia 1 solo ante REQUEST inicial
+        if perf == "REQUEST":
+            await self.enviar_fipa(
+                comportamiento,
+                JID_COORDINADOR,
+                "AGREE",
+                "(calcular_costo parametros_servicio)",
+                protocolo="FIPA-Request",
+                conversation_id=conv_id,
+                payload_extra={"id_cliente": payload.get("id_cliente", "cliente_001")},
+            )
 
         # Consulta histórico al entorno (datos(tarifas_historicas))
         referencias = self.entorno.consultarTarifasHistoricas(parametros)

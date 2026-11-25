@@ -34,6 +34,7 @@ from src.integracion_botpress.servidor_botpress import (
     crear_app_botpress,
 )
 from src.ml.datasets import generar_historico_ofertas, generar_tarifas_historicas
+from src.ml.generador_llm import GeneradorDialogoGemini
 from src.ml.modelos_ml import (
     ModeloCotizacionesRF,
     ModeloNLPVentas,
@@ -167,6 +168,14 @@ def test_modelos_sklearn_y_datasets() -> None:
 
     nlp_hostil = modelo_nlp.analizar_mensaje("Esto es una estafa, quiero un humano ya")
     assert nlp_hostil["tono_cliente"] == "hostil"
+
+    nlp_coloquial = modelo_nlp.analizar_mensaje("oye compadre que vendes")
+    assert nlp_coloquial["intencion"] == "consulta_servicio"
+    assert nlp_coloquial["tono_cliente"] == "interesado"
+
+    nlp_rechazo = modelo_nlp.analizar_mensaje("No voy a comprar, gracias, excede mi presupuesto")
+    assert nlp_rechazo["intencion"] == "rechazo_compra"
+    assert nlp_rechazo["tono_cliente"] == "indeciso"
 
 
 def test_extrae_cantidades_y_complejidad_en_espanol_segun_unidad() -> None:
@@ -782,7 +791,7 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
                 texto="Son 45 horas estimadas y complejidad 3",
             )
             perfs_1a = _extraer_performativas(res_completa["mensajes_fipa_turno"])
-            assert perfs_1a == ["REQUEST", "AGREE", "REQUEST", "AGREE", "INFORM", "INFORM"]
+            assert perfs_1a == ["INFORM", "INFORM", "INFORM", "INFORM"]
             assert res_completa["resultado"]["resultado"] == "cotizacion_entregada"
             assert res_completa["resultado"]["valor_total"] > 0
             assert "$" in res_completa["respuesta"]
@@ -795,6 +804,26 @@ def test_secuencia_1_cotizacion_multiturno_alt_y_else() -> None:
             assert res_completa["resultado"]["valor_total"] == servicio.modelo_rf.predecir_cotizacion(
                 entrada_horas
             )["valor_total"]
+
+            res_directa = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="573001119900",
+                nombre_cliente="Julian Perez",
+                texto="Quiero cotizar una automatizacion_ia de 50 horas complejidad 4",
+            )
+            perfs_directa = _extraer_performativas(res_directa["mensajes_fipa_turno"])
+            assert perfs_directa == ["REQUEST", "AGREE", "REQUEST", "AGREE", "INFORM", "INFORM"]
+            assert res_directa["resultado"]["resultado"] == "cotizacion_entregada"
+
+            res_no_viable = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="573001117766",
+                nombre_cliente="Mario Diaz",
+                texto="Quiero cotizar un servicio de plomeria de 20 horas",
+            )
+            perfs_no_viable = _extraer_performativas(res_no_viable["mensajes_fipa_turno"])
+            assert perfs_no_viable == ["REQUEST", "REFUSE"]
+            assert res_no_viable["resultado"]["resultado"] == "solicitud_no_viable"
         finally:
             await servicio.detener()
 
@@ -848,6 +877,7 @@ def test_negociacion_solo_aplica_el_descuento_autorizado() -> None:
             assert perfs_2a == [
                 "REQUEST",
                 "REQUEST",
+                "AGREE",
                 "PROPOSE",
                 "ACCEPT-PROPOSAL",
                 "INFORM",
@@ -869,6 +899,14 @@ def test_negociacion_solo_aplica_el_descuento_autorizado() -> None:
             assert perfs_2b == [
                 "REQUEST",
                 "REQUEST",
+                "AGREE",
+                "PROPOSE",
+                "REJECT-PROPOSAL",
+                "REFUSE",
+            ] or perfs_2b == [
+                "REQUEST",
+                "REQUEST",
+                "AGREE",
                 "PROPOSE",
                 "ACCEPT-PROPOSAL",
                 "INFORM",
@@ -878,6 +916,20 @@ def test_negociacion_solo_aplica_el_descuento_autorizado() -> None:
             assert "8%" in res_2b["respuesta"]
             assert "28%" not in res_2b["respuesta"]
             assert f"${precio_con_descuento:,.0f}" in res_2b["respuesta"]
+
+            res_2c = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="web_user_88",
+                nombre_cliente="Carlos Ruiz",
+                texto="No voy a comprar, gracias, excede mi presupuesto",
+            )
+            perfs_2c = _extraer_performativas(res_2c["mensajes_fipa_turno"])
+            assert perfs_2c == ["INFORM", "INFORM"]
+            assert res_2c["resultado"]["resultado"] == "oportunidad_descartada"
+            assert (
+                servicio.entorno.perfilesClientes.perfiles["web_user_88"].get("estado_oportunidad")
+                == "descartada"
+            )
         finally:
             await servicio.detener()
 
@@ -3120,3 +3172,233 @@ def test_agendamientos_sqlite_persisten_tras_reiniciar_repositorio(
     assert filas[0]["id_cliente"] == "cliente_persistente"
 
 
+
+
+def test_objecion_precio_sin_cotizacion_no_lanza_nameerror() -> None:
+    """Regresion: objetar precio antes de cotizar responde limpiamente sin NameError."""
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            res = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_sin_cot_1",
+                nombre_cliente="Sofia Morales",
+                texto="Esta muy caro para mi presupuesto, tienen descuento?",
+            )
+            assert res["accion"] == "cotizacion_requerida"
+            assert "cotización" in res["respuesta"].lower()
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
+
+def test_promociones_default_bd_son_elegibles_y_activan_knn() -> None:
+    """Las promociones sembradas por defecto incluyen condiciones estructuradas validas."""
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_promo_default",
+                nombre_cliente="Andres Castro",
+                texto="Quiero cotizar un desarrollo web de 40 horas complejidad 3",
+            )
+            res_promo = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_promo_default",
+                nombre_cliente="Andres Castro",
+                texto="El precio esta costoso para mi presupuesto, tienen alguna rebaja?",
+            )
+            perfs = _extraer_performativas(res_promo["mensajes_fipa_turno"])
+            assert "AGREE" in perfs
+            assert "PROPOSE" in perfs
+            assert "ACCEPT-PROPOSAL" in perfs
+            assert res_promo["accion"] == "promocion_presentada"
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
+
+def test_coordinador_rechaza_descuento_que_compromete_margen_minimo() -> None:
+    """Verifica la rama REJECT-PROPOSAL -> REFUSE cuando el descuento compromete rentabilidad."""
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            servicio.entorno.tarifasYMargenes.margen_minimo_ganancia = 0.34
+            await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_margen_estricto",
+                nombre_cliente="Diana Ruiz",
+                texto="Quiero cotizar un ecommerce de 50 horas complejidad 4",
+            )
+            res = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_margen_estricto",
+                nombre_cliente="Diana Ruiz",
+                texto="Esta muy costoso, necesito un descuento",
+            )
+            perfs = _extraer_performativas(res["mensajes_fipa_turno"])
+            assert perfs == [
+                "REQUEST",
+                "REQUEST",
+                "AGREE",
+                "PROPOSE",
+                "REJECT-PROPOSAL",
+                "REFUSE",
+            ]
+            assert res["accion"] == "descuento_rechazado"
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
+
+def test_generador_gemini_redacta_valida_hechos_y_hace_fallback_en_429() -> None:
+    """
+    Valida la arquitectura dual Scikit-Learn (NLU) + Gemini (NLG):
+    1) Redacta respuesta humana conservando el valor exacto del RandomForest.
+    2) Rechaza salida alucinada si Gemini altera el precio y cae al texto verificado.
+    3) Activa circuit breaker ante HTTP 429 (cuota agotada) evitando bloquear futuras llamadas.
+    """
+    llamadas_http: List[str] = []
+    modo_mock = {"caso": "ok"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        llamadas_http.append(str(request.url))
+        assert request.headers.get("x-goog-api-key") == "clave_gemini_demo"
+        if modo_mock["caso"] == "429":
+            return httpx.Response(429, json={"error": {"message": "Quota exceeded"}})
+        if modo_mock["caso"] == "alucinacion":
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": "Claro que si, tu desarrollo web cuesta solo $500,000 COP."
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            )
+        body = request.read().decode("utf-8")
+        # Extrae el monto exacto enviado en el prompt para redactar una respuesta natural valida
+        import re as _re
+
+        montos = _re.findall(r"\$[\d,]+", body)
+        monto_real = montos[0] if montos else "$0"
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": (
+                                        "Con mucho gusto revise los detalles de tu proyecto de "
+                                        "Desarrollo Web Corporativo / Landing & Portal. "
+                                        f"La inversion estimada queda en {monto_real} COP. "
+                                        "Si te parece bien, podemos agendar una reunion para arrancar."
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    tiempo_simulado = {"t": 100.0}
+    generador = GeneradorDialogoGemini(
+        api_key="clave_gemini_demo",
+        modelo="gemini-2.5-flash",
+        timeout_segundos=2.0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        reloj=lambda: tiempo_simulado["t"],
+    )
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            generador_llm=generador,
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            # 1) Redaccion natural exitosa conservando el valor del Random Forest
+            res_ok = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_gem_1",
+                nombre_cliente="Mateo Silva",
+                texto="Quiero cotizar un desarrollo web de 40 horas complejidad 3",
+            )
+            assert res_ok["accion"] == "cotizacion_entregada"
+            assert "Con mucho gusto revise los detalles" in res_ok["respuesta"]
+            assert f"${res_ok['resultado']['valor_total']:,.0f}" in res_ok["respuesta"]
+            assert generador.llamadas_exitosas == 1
+            assert len(llamadas_http) == 1
+
+            # 2) Anti-alucinacion: si Gemini cambia el monto, cae al borrador verificado
+            modo_mock["caso"] = "alucinacion"
+            res_guard = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_gem_2",
+                nombre_cliente="Lucia Vega",
+                texto="Quiero cotizar un desarrollo web de 40 horas complejidad 3",
+            )
+            assert "$500,000" not in res_guard["respuesta"]
+            assert f"${res_guard['resultado']['valor_total']:,.0f}" in res_guard["respuesta"]
+            assert generador.fallbacks_activados == 1
+
+            # 3) HTTP 429 (tokens agotados): activa circuit breaker y no vuelve a llamar HTTP
+            modo_mock["caso"] = "429"
+            res_429 = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_gem_3",
+                nombre_cliente="Paula Ortiz",
+                texto="Hola, que servicios ofrecen?",
+            )
+            assert res_429["accion"] == "catalogo_enviado"
+            assert "complejidad 1-5" not in res_429["respuesta"].lower()
+            assert generador.en_enfriamiento is True
+            llamadas_tras_429 = len(llamadas_http)
+
+            # Siguiente mensaje en enfriamiento responde al instante sin llamada HTTP
+            res_enfriado = await servicio.procesar_mensaje_entrante(
+                canal="WhatsApp",
+                id_cliente="cli_gem_4",
+                nombre_cliente="Oscar Leon",
+                texto="Oye compadre que vendes",
+            )
+            assert res_enfriado["accion"] == "catalogo_enviado"
+            assert len(llamadas_http) == llamadas_tras_429
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())

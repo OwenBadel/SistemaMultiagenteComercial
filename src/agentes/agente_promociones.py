@@ -266,6 +266,16 @@ class AgentePromociones(AgenteBaseMASML):
             self.creencias["solicitudCoordinador"] = payload
             self.creencias["nivelIndecision"] = nivel_indecision
 
+            await self.enviar_fipa(
+                comportamiento,
+                JID_COORDINADOR,
+                "AGREE",
+                "(calcular_descuento cotizacion_actual)",
+                protocolo="FIPA-Propose",
+                conversation_id=conv_id,
+                payload_extra={"id_cliente": id_cliente},
+            )
+
             datos_entorno = self.entorno.consultarHistoricoYMargenes(cotizacion_actual)
             self.validarPromocionesVigentes(datos_entorno)
             limite_promocion = min(

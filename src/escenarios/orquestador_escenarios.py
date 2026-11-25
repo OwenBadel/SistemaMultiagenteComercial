@@ -22,6 +22,7 @@ from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.comunicacion.spade_runtime import detener_agentes_spade, iniciar_agentes_spade
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
 from src.integracion_botpress.configuracion import ConfiguracionBotpress
+from src.ml.generador_llm import GeneradorDialogoGemini
 from src.ml.modelos_ml import (
     ModeloCotizacionesRF,
     ModeloNLPVentas,
@@ -61,6 +62,7 @@ class ServicioMultiagenteComercial:
         config_botpress: Optional[ConfiguracionBotpress] = None,
         repositorio: Optional[RepositorioEntorno] = None,
         google_calendar: Optional[ClienteGoogleCalendar] = None,
+        generador_llm: Optional[GeneradorDialogoGemini] = None,
         usar_xmpp_embebido: bool = True,
         consola: Optional[Console] = None,
         silencioso: bool = False,
@@ -142,6 +144,15 @@ class ServicioMultiagenteComercial:
             unidad_cantidad=unidad,
         )
         self.modelo_knn = ModeloPromocionesKNN(self.df_ofertas)
+        self.generador_llm = (
+            generador_llm
+            if generador_llm is not None
+            else GeneradorDialogoGemini(
+                api_key=self.config_botpress.gemini_api_key,
+                modelo=self.config_botpress.gemini_model,
+                timeout_segundos=self.config_botpress.gemini_timeout_seconds,
+            )
+        )
 
         # 4. Organizacion MAS-ML
         self.organizacion = SistemaMultiagenteComercial(entorno=self.entorno)
@@ -155,6 +166,7 @@ class ServicioMultiagenteComercial:
             organizacion=self.organizacion,
             monitor=self.monitor,
             modelo_nlp=self.modelo_nlp,
+            generador_llm=self.generador_llm,
         )
         self.cotizaciones = AgenteCotizaciones(
             entorno=self.entorno,
@@ -331,11 +343,11 @@ class ServicioMultiagenteComercial:
             parametros_acumulados=parametros_acumulados,
         )
         tipo_evento = tipo_evento_sugerido or analisis_previo["intencion"]
-        if contexto_nlp == "aceptar_cotizacion":
+        if contexto_nlp == "aceptar_cotizacion" and analisis_previo["intencion"] != "rechazo_compra":
             tipo_evento = "aceptar_cotizacion"
         elif (
             contexto_nlp == "solicitud_agendamiento"
-            and analisis_previo["intencion"] != "objecion_precio"
+            and analisis_previo["intencion"] not in {"objecion_precio", "rechazo_compra"}
         ):
             tipo_evento = "solicitud_agendamiento"
         elif (

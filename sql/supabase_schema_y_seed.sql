@@ -40,8 +40,12 @@ CREATE TABLE IF NOT EXISTS promociones_vigentes (
     descripcion TEXT NOT NULL,
     descuento_max DOUBLE PRECISION NOT NULL,
     activa BOOLEAN NOT NULL DEFAULT TRUE,
+    condiciones JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (negocio_id, codigo)
 );
+
+ALTER TABLE promociones_vigentes
+    ADD COLUMN IF NOT EXISTS condiciones JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS tarifas_historicas (
     negocio_id TEXT NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
@@ -133,10 +137,25 @@ INSERT INTO servicios (
     ('tech_freelance', 'consultoria_cloud', 5, 'Arquitectura Cloud, Migracion y DevOps', 'Contenedores Docker, CI/CD, seguridad y monitoreo en nube.', 110000, '["cloud","nube","devops","servidor"]'::jsonb, TRUE, 380000)
 ON CONFLICT (negocio_id, clave) DO NOTHING;
 
-INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa) VALUES
-    ('tech_freelance', 'PROMO_CIERRE_10', 'Incentivo de cierre rapido para clientes indecisos', 12.0, TRUE),
-    ('tech_freelance', 'PROMO_FIDELIDAD_15', 'Beneficio tope de retencion comercial', 15.0, TRUE)
-ON CONFLICT (negocio_id, codigo) DO NOTHING;
+INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa, condiciones) VALUES
+    (
+        'tech_freelance',
+        'PROMO_CIERRE_10',
+        'Incentivo de cierre rapido para clientes indecisos',
+        12.0,
+        TRUE,
+        '{"servicios":["desarrollo_web","automatizacion_ia","ecommerce","app_movil","consultoria_cloud"],"cantidad_minima":1,"cantidad_maxima":500,"complejidad_minima":1,"complejidad_maxima":5}'::jsonb
+    ),
+    (
+        'tech_freelance',
+        'PROMO_FIDELIDAD_15',
+        'Beneficio tope de retencion comercial',
+        15.0,
+        TRUE,
+        '{"servicios":["desarrollo_web","automatizacion_ia","ecommerce","app_movil","consultoria_cloud"],"cantidad_minima":20,"cantidad_maxima":500,"complejidad_minima":1,"complejidad_maxima":5}'::jsonb
+    )
+ON CONFLICT (negocio_id, codigo) DO UPDATE SET
+    condiciones = EXCLUDED.condiciones;
 
 INSERT INTO tarifas_historicas (
     negocio_id, id_cotizacion, tipo_servicio, tipo_servicio_id, complejidad,
@@ -220,9 +239,17 @@ INSERT INTO servicios (
     ('estudio_fotografia', 'video_reel', 4, 'Produccion de Video Reels / Comercial Corto', 'Grabacion 4K, edicion dinamica y colorizacion para redes.', 390000, '["video","reel","reels","comercial","grabacion"]'::jsonb, TRUE, 180000)
 ON CONFLICT (negocio_id, clave) DO NOTHING;
 
-INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa) VALUES
-    ('estudio_fotografia', 'PACK_SESIONES_10', 'Descuento para paquetes multi-sesion', 10.0, TRUE)
-ON CONFLICT (negocio_id, codigo) DO NOTHING;
+INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa, condiciones) VALUES
+    (
+        'estudio_fotografia',
+        'PACK_SESIONES_10',
+        'Descuento para paquetes multi-sesion',
+        10.0,
+        TRUE,
+        '{"servicios":["sesion_producto","retrato_corporativo","cobertura_evento","video_reel"],"cantidad_minima":1,"cantidad_maxima":50}'::jsonb
+    )
+ON CONFLICT (negocio_id, codigo) DO UPDATE SET
+    condiciones = EXCLUDED.condiciones;
 
 INSERT INTO tarifas_historicas (
     negocio_id, id_cotizacion, tipo_servicio, tipo_servicio_id, complejidad,

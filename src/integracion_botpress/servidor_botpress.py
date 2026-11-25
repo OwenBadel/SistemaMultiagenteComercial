@@ -275,6 +275,7 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
                 "knn_r2_cv": round(servicio_sma.modelo_knn.r2_entrenamiento, 4),
                 "registros_tarifas": len(servicio_sma.df_tarifas),
                 "registros_ofertas": len(servicio_sma.df_ofertas),
+                "generador_llm": servicio_sma.generador_llm.estado_actual(),
             },
             "agentes": [
                 {

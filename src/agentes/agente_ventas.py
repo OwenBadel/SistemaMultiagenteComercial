@@ -19,6 +19,7 @@ from src.agentes.base_agente import JID_COORDINADOR, AgenteBaseMASML
 from src.comunicacion.fipa_acl import extraer_payload_fipa
 from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
+from src.ml.generador_llm import GeneradorDialogoGemini
 from src.ml.modelos_ml import (
     ModeloNLPVentas,
     _es_objecion_precio_explicita,
@@ -143,6 +144,7 @@ class AgenteVentas(AgenteBaseMASML):
         organizacion: SistemaMultiagenteComercial,
         monitor: MonitorFIPAACL,
         modelo_nlp: ModeloNLPVentas,
+        generador_llm: Optional[GeneradorDialogoGemini] = None,
         jid: str = "ventas@localhost",
         password: str = "sma_2026",
     ) -> None:
@@ -151,12 +153,13 @@ class AgenteVentas(AgenteBaseMASML):
             password=password,
             nombre_agente="AgenteVentas",
             nombre_rol="EjecutivoVentas",
-            arquitectura_tipo="Con aprendizaje (NLP) y basado en utilidad",
+            arquitectura_tipo="Con aprendizaje (NLP + LLM NLG) y basado en utilidad",
             entorno=entorno,
             organizacion=organizacion,
             monitor=monitor,
         )
         self.modelo_nlp = modelo_nlp
+        self.generador_llm = generador_llm
         self.creencias: Dict[str, Any] = {
             "mensajesEntrantes": [],
             "historialCharla": [],
@@ -236,6 +239,40 @@ class AgenteVentas(AgenteBaseMASML):
         )
         return analisis
 
+    def _redactar_con_llm(
+        self,
+        tipo_respuesta: str,
+        texto_base: str,
+        hechos_obligatorios: Optional[list[str]] = None,
+    ) -> str:
+        """Usa Gemini para redactar naturalmente conservando hechos verificados y fallback."""
+        if self.generador_llm is None or not self.generador_llm.activo:
+            return texto_base
+        ultimo_msg = (
+            str(self.creencias["mensajesEntrantes"][-1])
+            if self.creencias.get("mensajesEntrantes")
+            else ""
+        )
+        return self.generador_llm.redactar_respuesta(
+            tipo_respuesta=tipo_respuesta,
+            texto_base=texto_base,
+            contexto_negocio=self.entorno.config_negocio,
+            mensaje_cliente=ultimo_msg,
+            historial_reciente=list(self.creencias.get("historialCharla", [])),
+            hechos_obligatorios=hechos_obligatorios,
+        )
+
+    @staticmethod
+    def _describir_parametro_faltante(campo: str, unidad: str) -> str:
+        mapa = {
+            "tipo_servicio": "qué servicio necesitas",
+            "horas_estimadas": "cuántas horas aproximadas estimas",
+            "sesiones_requeridas": "cuántas sesiones necesitas",
+            "cantidad_unidades": f"la cantidad de {unidad} que necesitas",
+            "complejidad": "el nivel de alcance o detalle del proyecto",
+        }
+        return mapa.get(campo, campo.replace("_", " "))
+
     def enviarCatalogoVisual(self, canal: str, id_cliente: str) -> Dict[str, Any]:
         """Envia el portafolio visual de servicios cargado dinamicamente desde BD."""
         cfg = self.entorno.config_negocio
@@ -252,10 +289,18 @@ class AgenteVentas(AgenteBaseMASML):
             f"- {meta.get('nombre', clave)} (desde ${float(meta.get('tarifa_unitaria', meta.get('tarifa_hora_cop', 0))):,.0f} {moneda}/{unidad})"
             for clave, meta in catalogo.items()
         ]
-        texto_catalogo = (
+        texto_base = (
             f"Hola! {intro}:\n"
             + "\n".join(lineas)
-            + f"\nIndicame que servicio necesitas y la cantidad de {unidad} (y complejidad 1-5 si aplica)."
+            + f"\nCuéntame qué servicio te interesa y aproximadamente cuántas {unidad} estás planeando para prepararte una cotización."
+        )
+        hechos_catalogo = [unidad] + [
+            str(meta.get("nombre", clave)) for clave, meta in catalogo.items()
+        ]
+        texto_catalogo = self._redactar_con_llm(
+            tipo_respuesta="catalogo_servicios",
+            texto_base=texto_base,
+            hechos_obligatorios=hechos_catalogo,
         )
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": texto_catalogo}
@@ -270,18 +315,28 @@ class AgenteVentas(AgenteBaseMASML):
         return res
 
     def responderLenguajeNatural(
-        self, tipo_respuesta: str, canal: str, id_cliente: str, mensaje: str
+        self,
+        tipo_respuesta: str,
+        canal: str,
+        id_cliente: str,
+        mensaje: str,
+        hechos_obligatorios: Optional[list[str]] = None,
     ) -> Dict[str, Any]:
         """Envía respuesta natural al cliente mediante EntornoVirtualAtencion."""
+        mensaje_final = self._redactar_con_llm(
+            tipo_respuesta=tipo_respuesta,
+            texto_base=mensaje,
+            hechos_obligatorios=hechos_obligatorios,
+        )
         self.creencias["historialCharla"].append(
-            {"rol": "agente_ventas", "texto": mensaje}
+            {"rol": "agente_ventas", "texto": mensaje_final}
         )
         self.registrar_accion(f"responderLenguajeNatural({tipo_respuesta})", f"canal={canal}")
         res = self.entorno.registrarRespuestaEntorno(
             accion=f"responderLenguajeNatural({tipo_respuesta})",
             canal=canal,
             id_cliente=id_cliente,
-            contenido=mensaje,
+            contenido=mensaje_final,
         )
         return res
 
@@ -370,10 +425,18 @@ class AgenteVentas(AgenteBaseMASML):
 
         moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
         self.creencias["promocionAprobada"] = descuento
-        mensaje = (
+        mensaje_base = (
             f"Hay una promoción autorizada para esta cotización: {descuento:g}% "
             f"de descuento, con un valor final de ${valor_final_esperado:,.0f} "
             f"{moneda}. ¿Deseas continuar?"
+        )
+        mensaje = self._redactar_con_llm(
+            tipo_respuesta="promocion_autorizada",
+            texto_base=mensaje_base,
+            hechos_obligatorios=[
+                f"{descuento:g}%",
+                f"${valor_final_esperado:,.0f}",
+            ],
         )
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": mensaje}
@@ -493,6 +556,26 @@ class AgenteVentas(AgenteBaseMASML):
                     "canal": canal,
                     "motivo_critico": texto,
                     "tono_cliente": "hostil",
+                },
+            )
+            return
+
+        # Alternativa C: Cliente declina oferta y rechaza la compra
+        if (
+            tipo_evento in {"rechazo_compra", "rechazo_compra_no_interesado"}
+            or analisis["intencion"] == "rechazo_compra"
+        ):
+            await self.escalarCasoACoordinador(
+                comportamiento=comportamiento,
+                performativa="INFORM",
+                predicado="(cliente_declina_oferta motivo: excede_presupuesto)",
+                protocolo="FIPA-Request",
+                conversation_id=conversation_id,
+                payload_extra={
+                    "id_cliente": id_cliente,
+                    "canal": canal,
+                    "contexto_conversacion_id": contexto_id,
+                    "motivo_rechazo": texto or "excede_presupuesto",
                 },
             )
             return
@@ -678,19 +761,34 @@ class AgenteVentas(AgenteBaseMASML):
                     self.entorno.perfilesClientes.establecer_fecha_agendamiento_pendiente(
                         id_cliente, fecha_hora_nueva, contexto_id
                     )
-            await self.escalarCasoACoordinador(
-                comportamiento=comportamiento,
-                performativa="REQUEST",
-                predicado="(escalar_caso cotizacion parametros_servicio)",
-                protocolo="FIPA-Request",
-                conversation_id=conversation_id,
-                payload_extra={
-                    "id_cliente": id_cliente,
-                    "canal": canal,
-                    "contexto_conversacion_id": contexto_id,
-                    "parametros_servicio": params,
-                },
-            )
+            if esperando_params and tiene_nuevos_params:
+                await self.escalarCasoACoordinador(
+                    comportamiento=comportamiento,
+                    performativa="INFORM",
+                    predicado="(parametros_completados parametros_servicio)",
+                    protocolo="FIPA-Request",
+                    conversation_id=conversation_id,
+                    payload_extra={
+                        "id_cliente": id_cliente,
+                        "canal": canal,
+                        "contexto_conversacion_id": contexto_id,
+                        "parametros_servicio": params,
+                    },
+                )
+            else:
+                await self.escalarCasoACoordinador(
+                    comportamiento=comportamiento,
+                    performativa="REQUEST",
+                    predicado="(solicitar_cotizacion_servicio parametros_servicio)",
+                    protocolo="FIPA-Request",
+                    conversation_id=conversation_id,
+                    payload_extra={
+                        "id_cliente": id_cliente,
+                        "canal": canal,
+                        "contexto_conversacion_id": contexto_id,
+                        "parametros_servicio": params,
+                    },
+                )
             return
 
         # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual
@@ -760,7 +858,6 @@ class AgenteVentas(AgenteBaseMASML):
                 self.marcar_ciclo_completado(
                     {
                         "resultado": "cotizacion_requerida",
-                        "fecha_hora": fecha_hora or None,
                         "envio": res,
                     }
                 )
@@ -1044,7 +1141,7 @@ class AgenteVentas(AgenteBaseMASML):
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
                 performativa="REQUEST",
-                predicado="(escalar_caso agendamiento fecha_hora)",
+                predicado="(solicitar_agendamiento fecha_hora cliente)",
                 protocolo="FIPA-Query",
                 conversation_id=conversation_id,
                 payload_extra={
@@ -1118,7 +1215,16 @@ class AgenteVentas(AgenteBaseMASML):
                     f"es de ${valor_total:,.0f} {moneda} (Base: ${costo_base:,.0f} {moneda}, "
                     f"Ajuste por alcance/urgencia: ${ajuste:,.0f} {moneda})."
                 )
-            res = self.responderLenguajeNatural("cotizacion_formal", canal, id_cliente, texto_cot)
+            res = self.responderLenguajeNatural(
+                "cotizacion_formal",
+                canal,
+                id_cliente,
+                texto_cot,
+                hechos_obligatorios=[
+                    str(desglose.get("servicio", "")),
+                    f"${valor_total:,.0f}",
+                ],
+            )
             self.marcar_ciclo_completado(
                 {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res}
             )
@@ -1127,10 +1233,14 @@ class AgenteVentas(AgenteBaseMASML):
             etiqueta_default = str(
                 self.entorno.config_negocio.get("etiqueta_cantidad", "cantidad_unidades")
             )
+            unidad = str(self.entorno.config_negocio.get("unidad_cantidad", "unidades"))
             faltantes = payload.get("faltantes", [etiqueta_default])
+            descripciones = [
+                self._describir_parametro_faltante(str(c), unidad) for c in faltantes
+            ]
             texto_aclaracion = (
-                "Para entregarte una cotización exacta necesito confirmar los siguientes "
-                f"parámetros obligatorios: {', '.join(faltantes)}."
+                "Con gusto te preparo la cotización. Para darte un valor exacto, "
+                f"cuéntame por favor {', '.join(descripciones)}."
             )
             res = self.responderLenguajeNatural("pregunta_aclaratoria", canal, id_cliente, texto_aclaracion)
             self.marcar_ciclo_completado(
@@ -1272,7 +1382,13 @@ class AgenteVentas(AgenteBaseMASML):
                     "en la agenda del negocio. "
                     f"Estado de Google Calendar: {google_estado}."
                 )
-            res = self.responderLenguajeNatural("confirmacion_cita", canal, id_cliente, texto_cita)
+            res = self.responderLenguajeNatural(
+                "confirmacion_cita",
+                canal,
+                id_cliente,
+                texto_cita,
+                hechos_obligatorios=[fecha_hora] if fecha_hora else None,
+            )
             self.marcar_ciclo_completado(
                 {
                     "resultado": "cita_confirmada",
@@ -1320,9 +1436,43 @@ class AgenteVentas(AgenteBaseMASML):
                 else "El horario solicitado está ocupado y no pude verificar alternativas disponibles. "
                 "¿Qué otro día u hora te gustaría consultar?"
             )
-            res = self.responderLenguajeNatural("sugerir_horarios_alternativos", canal, id_cliente, texto_alt)
+            res = self.responderLenguajeNatural(
+                "sugerir_horarios_alternativos",
+                canal,
+                id_cliente,
+                texto_alt,
+                hechos_obligatorios=list(alternativas) if alternativas else None,
+            )
             self.marcar_ciclo_completado(
                 {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res}
+            )
+
+        elif perf == "REFUSE" and "fuera_de_alcance_operativo" in contenido:
+            texto_no_viable = (
+                "En este momento esa solicitud se encuentra fuera de nuestro alcance operativo. "
+                "Si deseas consultar otros servicios de nuestro catálogo, con gusto te ayudo."
+            )
+            res = self.responderLenguajeNatural(
+                "solicitud_no_viable_cierre", canal, id_cliente, texto_no_viable
+            )
+            self.marcar_ciclo_completado(
+                {
+                    "resultado": "solicitud_no_viable",
+                    "motivo": payload.get("motivo", "fuera_de_alcance_operativo"),
+                    "envio": res,
+                }
+            )
+
+        elif perf == "INFORM" and "confirmar_cierre_conversacion" in contenido:
+            texto_despedida = (
+                "Entendido, registramos el cierre de tu solicitud. "
+                "Muchas gracias por tu tiempo y quedamos atentos si más adelante necesitas nuestros servicios."
+            )
+            res = self.responderLenguajeNatural(
+                "despedida_cordial_y_registro", canal, id_cliente, texto_despedida
+            )
+            self.marcar_ciclo_completado(
+                {"resultado": "oportunidad_descartada", "envio": res}
             )
 
         elif perf == "CANCEL" and "cancelar_accion" in contenido:

@@ -27,7 +27,7 @@ Cliente (WhatsApp / Webchat / Instagram / Messenger)
 
 | Agente | Rol | Que es capaz de hacer | Arquitectura | Modelo de Machine Learning |
 | :--- | :--- | :--- | :--- | :--- |
-| `AgenteVentas` | `EjecutivoVentas` | Unica puerta conversacional con el cliente. Interpreta mensajes, detecta tono (`interesado`, `indeciso`, `hostil`), extrae parametros dinamicamente segun el catalogo de BD, envia el portafolio y comunica cotizaciones, descuentos o citas. | Con aprendizaje y basado en utilidad | Clasificacion NLP con **TF-IDF + LogisticRegression** (Scikit-Learn) + extraccion dinamica por palabras clave de BD |
+| `AgenteVentas` | `EjecutivoVentas` | Unica puerta conversacional con el cliente. Interpreta mensajes, detecta tono (`interesado`, `indeciso`, `hostil`), extrae parametros dinamicamente segun el catalogo de BD, envia el portafolio y redacta respuestas naturales para cotizaciones, descuentos, citas o cierres. | Con aprendizaje (NLU + NLG) y basado en utilidad | **Scikit-Learn** (`TF-IDF + LogisticRegression`) para clasificacion determinista, extraccion de entidades y `nivel_indecision` + **Gemini API** (NLG opcional con validador anti-alucinacion y circuit breaker ante HTTP 429/timeout) |
 | `AgenteCoordinador` | `Coordinador` | Orquesta turnos entre especialistas, enruta peticiones, evalua la utilidad/rentabilidad de las ofertas frente al margen minimo del negocio y suspende la automatizacion de un chat escalandolo al dueno ante casos criticos. | Basado en utilidad | Evaluacion racional de utilidad sobre margenes configurados en BD |
 | `AgenteCotizaciones` | `LiquidadorCotizaciones` | Valida requisitos obligatorios segun el servicio solicitado (pidiendo aclaraciones si faltan datos) y calcula cotizaciones formales con desglose economico usando el historico del negocio. | Con aprendizaje y basado en metas | **RandomForestRegressor** (Scikit-Learn) entrenado con la tabla `tarifas_historicas` |
 | `AgentePromociones` | `AnalistaPromociones` | Evalua promociones vigentes y propone el porcentaje optimo de descuento ante objeciones de precio, equilibrando probabilidad de cierre y margen de ganancia. | Con aprendizaje y basado en utilidad | **KNeighborsRegressor (KNN)** con `StandardScaler` (Scikit-Learn) sobre `historico_ofertas` |
@@ -39,7 +39,7 @@ Cliente (WhatsApp / Webchat / Instagram / Messenger)
 
 ### Base de datos en la nube (Supabase)
 1. Crea un proyecto en `https://supabase.com/`.
-2. En **SQL Editor -> New query**, pega y ejecuta [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) (crea las 7 tablas: `negocios`, `servicios`, `promociones_vigentes`, `tarifas_historicas`, `historico_ofertas`, `perfiles_clientes`, `alertas_humanas` e incluye los negocios de ejemplo `tech_freelance` y `estudio_fotografia`).
+2. En **SQL Editor -> New query**, pega y ejecuta [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) (crea las 8 tablas: `negocios`, `servicios`, `promociones_vigentes`, `tarifas_historicas`, `historico_ofertas`, `perfiles_clientes`, `alertas_humanas` y `agendamientos`, e incluye los negocios de ejemplo `tech_freelance` y `estudio_fotografia`).
 3. En **Project Settings -> Data API / API Keys**, copia tu **Project URL** (`https://...supabase.co`) y tu **Secret key** (`sb_secret_...`).
 
 ### Agenda real (Google Calendar API v3)
@@ -60,6 +60,9 @@ GOOGLE_TIMEZONE=America/Bogota
 
 OWNER_WHATSAPP_NUMBER=573001234567
 BOTPRESS_API_KEY=
+HUMAN_REACTIVATION_API_KEY=admin_sma_2026
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
 HOST=0.0.0.0
 PORT=8000
 ```

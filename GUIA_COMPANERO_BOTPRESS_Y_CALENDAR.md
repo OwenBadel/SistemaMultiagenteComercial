@@ -48,8 +48,14 @@ GOOGLE_TIMEZONE=America/Bogota
 # Formato internacional sin + ni espacios (ejemplo Colombia: 573001234567)
 OWNER_WHATSAPP_NUMBER=57REEMPLAZAR_CON_NUMERO_PERSONAL_DEL_DUENO
 
-# --- SEGURIDAD OPCIONAL Y PUERTO ---
+# --- SEGURIDAD, MONITOR WEB Y GEMINI NLG ---
 BOTPRESS_API_KEY=
+# Clave requerida para abrir el monitor web (GET /api/estado) y reactivar chats
+HUMAN_REACTIVATION_API_KEY=admin_sma_2026
+# Opcional: clave gratuita de https://aistudio.google.com/apikey para redaccion natural
+# Si queda vacio o se agotan los tokens (HTTP 429), cae automaticamente a texto local verificado
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
 HOST=0.0.0.0
 PORT=8000
 ```

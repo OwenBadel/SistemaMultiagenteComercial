@@ -545,6 +545,18 @@ class ModeloNLPVentas:
             "porqueria", "porquería", "denunciar", "furioso", "inaceptable",
             "humano ya", "bot inutil", "bot inútil", "reclamo", "reclamar",
         )
+        palabras_rechazo = (
+            "no voy a comprar", "no me interesa", "declino",
+            "cancelar la solicitud", "cancela la solicitud", "cancelo la solicitud",
+            "no lo voy a tomar", "desisto", "rechazo la oferta",
+            "no quiero continuar", "mejor lo dejo asi",
+        )
+        palabras_consulta = (
+            "vendes", "venden", "vende", "ofreces", "ofrecen", "ofrece",
+            "que tienes", "que tienen", "que hay", "que hacen",
+            "a que te dedicas", "a que se dedican", "catalogo", "portafolio",
+            "que productos", "que manejas", "que manejan",
+        )
         palabras_agenda = (
             "agendar", "agenda", "cita", "reservar", "horario", "fecha",
             "reunion", "reunión", "calendario", "apartar",
@@ -598,6 +610,13 @@ class ModeloNLPVentas:
             tono = "interesado"
             nivel_indecision = 0.20
             confianza_reglas = 1.0
+        elif contexto_tipo in {"rechazo_compra", "rechazo_compra_no_interesado"} or any(
+            _contiene_termino(texto_norm, palabra) for palabra in palabras_rechazo
+        ):
+            intencion = "rechazo_compra"
+            tono = "indeciso"
+            nivel_indecision = 0.85
+            confianza_reglas = 1.0
         elif objecion_precio_explicita:
             intencion = "objecion_precio"
             tono = "indeciso"
@@ -631,6 +650,7 @@ class ModeloNLPVentas:
                     "sesiones_requeridas",
                     "cantidad_productos",
                     "complejidad",
+                    "fuera_de_alcance",
                 )
             )
             and any(
@@ -646,10 +666,12 @@ class ModeloNLPVentas:
             tono = "interesado"
             nivel_indecision = 0.20
             confianza_reglas = 1.0
-        elif contexto_tipo == "consulta_servicio":
+        elif contexto_tipo == "consulta_servicio" or any(
+            _contiene_termino(texto_norm, palabra) for palabra in palabras_consulta
+        ):
             intencion = "consulta_servicio"
             tono = "interesado"
-            nivel_indecision = 0.25
+            nivel_indecision = 0.20
             confianza_reglas = 1.0
         else:
             if intencion_ml == "objecion_precio":
@@ -988,6 +1010,14 @@ class ModeloNLPVentas:
                 params["fecha_hora_pasada"] = bool(
                     fecha_hora <= datetime.now(ZoneInfo("America/Bogota"))
                 )
+
+        rubros_ajenos = (
+            "plomeria", "carpinteria", "construccion", "mecanica", "cirugia",
+        )
+        if "tipo_servicio" not in params and any(
+            _contiene_termino(texto_norm, rubro) for rubro in rubros_ajenos
+        ):
+            params["fuera_de_alcance"] = True
 
         return params
 

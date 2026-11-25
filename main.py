@@ -91,8 +91,18 @@ def _imprimir_estado_servidor(
         f"http://{host_visible}:{config_botpress.port}/api/botpress/mensaje",
     )
     tabla.add_row(
+        "Redaccion Natural (NLG)",
+        servicio.generador_llm.estado_actual()["modo"],
+    )
+    tabla.add_row(
         "Seguridad API Key (.env)",
         "ACTIVA" if config_botpress.botpress_api_key else "ABIERTA (Ideal pruebas / ngrok)",
+    )
+    tabla.add_row(
+        "Clave Admin Monitor (.env)",
+        "CONFIGURADA"
+        if config_botpress.human_reactivation_api_key.strip()
+        else "NO CONFIGURADA (Define HUMAN_REACTIVATION_API_KEY en .env para abrir /api/estado)",
     )
 
     consola.print(

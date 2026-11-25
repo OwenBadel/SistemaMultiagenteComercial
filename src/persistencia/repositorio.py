@@ -299,18 +299,33 @@ def _config_negocio_default(negocio_id: str) -> Dict[str, Any]:
 
 
 def _promos_default() -> List[Dict[str, Any]]:
+    servicios_tech = list(CATALOGO_SERVICIOS.keys())
     return [
         {
             "codigo": "PROMO_CIERRE_10",
             "descripcion": "Incentivo de cierre rapido para clientes indecisos",
             "descuento_max": 12.0,
             "activa": True,
+            "condiciones": {
+                "servicios": servicios_tech,
+                "cantidad_minima": 1,
+                "cantidad_maxima": 500,
+                "complejidad_minima": 1,
+                "complejidad_maxima": 5,
+            },
         },
         {
             "codigo": "PROMO_FIDELIDAD_15",
             "descripcion": "Beneficio tope de retencion comercial",
             "descuento_max": 15.0,
             "activa": True,
+            "condiciones": {
+                "servicios": servicios_tech,
+                "cantidad_minima": 20,
+                "cantidad_maxima": 500,
+                "complejidad_minima": 1,
+                "complejidad_maxima": 5,
+            },
         },
     ]
 
@@ -371,6 +386,7 @@ class RepositorioSQLite(RepositorioEntorno):
                 descripcion TEXT NOT NULL,
                 descuento_max REAL NOT NULL,
                 activa INTEGER NOT NULL DEFAULT 1,
+                condiciones TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY (negocio_id, codigo)
             );
             CREATE TABLE IF NOT EXISTS tarifas_historicas (
@@ -456,6 +472,14 @@ class RepositorioSQLite(RepositorioEntorno):
                 ON agendamientos (google_event_id) WHERE google_event_id IS NOT NULL;
             """
         )
+        cols_promo = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(promociones_vigentes)").fetchall()
+        }
+        if "condiciones" not in cols_promo:
+            self._conn.execute(
+                "ALTER TABLE promociones_vigentes ADD COLUMN condiciones TEXT NOT NULL DEFAULT '{}'"
+            )
         self._conn.commit()
 
     def _asegurar_datos_iniciales(self) -> None:
@@ -506,8 +530,15 @@ class RepositorioSQLite(RepositorioEntorno):
 
         for p in _promos_default():
             cur.execute(
-                "INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa) VALUES (?, ?, ?, ?, ?)",
-                (self.negocio_id, p["codigo"], p["descripcion"], p["descuento_max"], 1 if p["activa"] else 0),
+                "INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa, condiciones) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    self.negocio_id,
+                    p["codigo"],
+                    p["descripcion"],
+                    p["descuento_max"],
+                    1 if p["activa"] else 0,
+                    json.dumps(p.get("condiciones", {}), ensure_ascii=False),
+                ),
             )
 
         for _, r in generar_tarifas_historicas(n_registros=45).iterrows():
