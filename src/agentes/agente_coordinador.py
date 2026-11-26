@@ -291,6 +291,11 @@ class AgenteCoordinador(AgenteBaseMASML):
                     "(motivo: requiere_cotizacion_aprobada)",
                     protocolo="FIPA-Query",
                     conversation_id=conversation_id,
+                    payload_extra={
+                        "id_cliente": id_cliente,
+                        "canal": payload.get("canal", "WhatsApp"),
+                        "contexto_conversacion_id": contexto_id,
+                    },
                 )
                 return
 
@@ -383,8 +388,8 @@ class AgenteCoordinador(AgenteBaseMASML):
     ) -> Dict[str, Any]:
         """
         Función de utilidad racional del AgenteCoordinador:
-        Evalúa si el descuento propuesto protege el margen mínimo de ganancia (22%)
-        y respeta el tope máximo permitido (15%), maximizando la conversión esperada.
+        Evalúa si el descuento propuesto protege el margen mínimo de ganancia y
+        respeta el tope máximo permitido configurados en BD, maximizando el cierre.
         """
         bd = self.entorno.tarifasYMargenes
         margen_base = bd.margen_base_estimado
@@ -470,7 +475,6 @@ class AgenteCoordinador(AgenteBaseMASML):
         self, comportamiento: CyclicBehaviour, msg: Message
     ) -> None:
         perf = (msg.get_metadata("performative") or "").upper()
-        proto = msg.get_metadata("protocol") or "FIPA-Request"
         conv_id = msg.get_metadata("conversation_id") or msg.thread or "conv-default"
         contenido = msg.body or ""
         payload = extraer_payload_fipa(msg)
@@ -541,12 +545,14 @@ class AgenteCoordinador(AgenteBaseMASML):
                     "(cancelar_accion atencion_automatica_chat)",
                     protocolo="FIPA-Request",
                     conversation_id=conv_id,
-                    payload_extra={"id_cliente": payload.get("id_cliente", "cliente_001")},
+                    payload_extra={
+                        "id_cliente": payload.get("id_cliente", "cliente_001"),
+                        "canal": payload.get("canal", "WhatsApp"),
+                    },
                 )
             elif perf == "CONFIRM" and "automatizacion_pausada" in contenido:
                 ctx = self._contexto_conversaciones.get(conv_id, {})
                 id_cliente = str(payload.get("id_cliente", ctx.get("id_cliente", "cliente_001")))
-                canal = str(payload.get("canal", ctx.get("canal", "WhatsApp")))
                 motivo_critico = str(ctx.get("motivo_critico", "reclamo_critico_cliente"))
                 perfil = self.entorno.perfilesClientes.obtener_o_crear_perfil(id_cliente)
                 resultado = self.pausarYAlertarHumano(

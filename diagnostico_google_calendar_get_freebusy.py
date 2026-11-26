@@ -1,10 +1,9 @@
 """Diagnostico de solo lectura para calendars.get y FreeBusy."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 

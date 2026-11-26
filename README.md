@@ -18,7 +18,7 @@ Cliente (WhatsApp / Webchat / Instagram / Messenger)
 
 1. **Atencion multicanal via Botpress:** Todo mensaje entrante de un cliente llega al endpoint `POST /api/botpress/mensaje`.
 2. **Negocio 100% definido por base de datos:** Al iniciar, el sistema carga desde Supabase (`NEGOCIO_ID`) el rubro, moneda, unidad de cobro (`horas`, `sesiones`, etc.), catalogo de servicios, palabras clave, margenes minimos y topes de descuento.
-3. **Procesamiento colaborativo en SPADE + Scikit-Learn:** Los agentes analizan la intencion del cliente, muestran el portafolio, liquidan cotizaciones con `RandomForestRegressor`, calculan incentivos con `KNeighborsRegressor`, consultan/reservan citas reales en Google Calendar y ejecutan escalamiento **Human-in-the-Loop** por chat cuando detectan un caso critico.
+3. **Procesamiento colaborativo en SPADE + Scikit-Learn:** Los agentes analizan la intencion del cliente, muestran el portafolio sin revelar tarifas prematuramente, liquidan cotizaciones (tarifario por sesiones, motor de economia unitaria anti-perdida para solicitudes a medida/fraccionadas y `RandomForestRegressor` para proyectos por horas), calculan incentivos con `KNeighborsRegressor`, consultan/reservan citas reales en Google Calendar + Supabase y ejecutan escalamiento **Human-in-the-Loop** por chat cuando detectan un caso critico.
 4. **Control Human-in-the-Loop aislado por chat:** Si un cliente entra en atencion humana, el sistema pausa unicamente ese `id_cliente`, marca `notificar_dueno: true` para que Botpress avise al WhatsApp personal del dueno, y devuelve `responder_al_cliente: false` en mensajes posteriores mientras el dueno responde desde su WhatsApp corporativo. Desde el monitor web (`GET /`) se puede reactivar la automatizacion al terminar.
 
 ---
@@ -28,8 +28,8 @@ Cliente (WhatsApp / Webchat / Instagram / Messenger)
 | Agente | Rol | Que es capaz de hacer | Arquitectura | Modelo de Machine Learning |
 | :--- | :--- | :--- | :--- | :--- |
 | `AgenteVentas` | `EjecutivoVentas` | Unica puerta conversacional con el cliente. Interpreta mensajes, detecta tono (`interesado`, `indeciso`, `hostil`), extrae parametros dinamicamente segun el catalogo de BD, envia el portafolio y redacta respuestas naturales para cotizaciones, descuentos, citas o cierres. | Con aprendizaje (NLU + NLG) y basado en utilidad | **Scikit-Learn** (`TF-IDF + LogisticRegression`) para clasificacion determinista, extraccion de entidades y `nivel_indecision` + **Gemini API** (NLG opcional con validador anti-alucinacion y circuit breaker ante HTTP 429/timeout) |
-| `AgenteCoordinador` | `Coordinador` | Orquesta turnos entre especialistas, enruta peticiones, evalua la utilidad/rentabilidad de las ofertas frente al margen minimo del negocio y suspende la automatizacion de un chat escalandolo al dueno ante casos criticos. | Basado en utilidad | Evaluacion racional de utilidad sobre margenes configurados en BD |
-| `AgenteCotizaciones` | `LiquidadorCotizaciones` | Valida requisitos obligatorios segun el servicio solicitado (pidiendo aclaraciones si faltan datos) y calcula cotizaciones formales con desglose economico usando el historico del negocio. | Con aprendizaje y basado en metas | **RandomForestRegressor** (Scikit-Learn) entrenado con la tabla `tarifas_historicas` |
+| `AgenteCoordinador` | `Coordinador` | Orquesta turnos entre especialistas, enruta peticiones, audita propuestas comerciales y descuentos frente al margen minimo anti-perdida configurado en BD y suspende la automatizacion de un chat escalandolo al dueno ante casos criticos. | Basado en utilidad | Evaluacion racional de utilidad y piso minimo de rentabilidad sobre margenes configurados en BD |
+| `AgenteCotizaciones` | `LiquidadorCotizaciones` | Valida requisitos obligatorios segun el servicio solicitado (pidiendo aclaraciones si faltan datos) y calcula cotizaciones formales con desglose economico usando tarifa por sesiones, economia unitaria anti-perdida (solicitudes a medida/fraccionadas) o el historico del negocio. | Con aprendizaje y basado en metas | **RandomForestRegressor** (Scikit-Learn) entrenado con `tarifas_historicas` (servicios por horas) + tarifa configurada y motor unitario anti-perdida (sesiones) |
 | `AgentePromociones` | `AnalistaPromociones` | Evalua promociones vigentes y propone el porcentaje optimo de descuento ante objeciones de precio, equilibrando probabilidad de cierre y margen de ganancia. | Con aprendizaje y basado en utilidad | **KNeighborsRegressor (KNN)** con `StandardScaler` (Scikit-Learn) sobre `historico_ofertas` |
 | `AgenteAgendamientos` | `GestorAgenda` | Verifica disponibilidad real en la agenda del dueno, propone horarios libres alternativos del dia si el bloque esta ocupado y crea la cita confirmada en calendario. | Basado en metas | Integracion directa con **Google Calendar API v3** (`freeBusy` y `events.insert`) |
 
@@ -62,7 +62,7 @@ OWNER_WHATSAPP_NUMBER=573001234567
 BOTPRESS_API_KEY=
 HUMAN_REACTIVATION_API_KEY=admin_sma_2026
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3-flash-preview
 HOST=0.0.0.0
 PORT=8000
 ```
@@ -71,7 +71,7 @@ Las reservas se guardan en `public.agendamientos`. Sin Google Calendar configura
 
 Si no configuras `SUPABASE_URL` y `SUPABASE_KEY`, el proyecto usa SQLite local persistente para desarrollo. En ese modo, las citas se conservan en SQLite; para producción y almacenamiento en `public.agendamientos`, configura Supabase.
 
-Al solicitar una cita se entienden fechas relativas como “hoy”, “mañana”, “pasado mañana”, “ayer” y “en/dentro de N días”, calculadas en `America/Bogota`. Si solo se indica el día, se propone las 10:00 a. m.; las fechas relativas pasadas no se reservan y se solicita una fecha futura. Si no se reconoce ninguna fecha, el agente pide aclaración en vez de asignar una fecha por defecto.
+Al solicitar una cita se entienden fechas relativas como “hoy”, “mañana”, “pasado mañana”, “ayer”, “en/dentro de N días”, expresiones de día del mes (“el 30 a las 3pm”) y horarios como “mediodía”, calculados en `America/Bogota`. Si solo se indica el día sin hora, el agente conserva la fecha parcial y pregunta explícitamente la hora deseada en vez de asumir una por defecto; las fechas pasadas no se reservan y se solicita una fecha futura. Si no se reconoce ninguna fecha, el agente pide aclaración en vez de asignar una fecha por defecto.
 
 Si Google Calendar crea un evento, pero Supabase no puede confirmar el estado sincronizado, la cita queda pendiente con el identificador del evento para reconciliación manual; el agente no confirma al cliente ni elimina automáticamente el evento. Las citas pendientes bloquean el horario, así que no se debe reintentar la sincronización hasta revisar el registro y ese ID en ambas fuentes. Si tampoco se puede guardar el marcador de recuperación en Supabase, el ID del evento se deja en el log para revisión manual.
 

@@ -96,7 +96,7 @@ class ServicioMultiagenteComercial:
             self.google_calendar: Optional[ClienteGoogleCalendar] = google_calendar
         elif self.config_botpress.google_calendar_configurado:
             cred_valor = self.config_botpress.google_service_account_json.strip()
-            if not cred_valor.startswith("{") and not Path(cred_valor).is_absolute():
+            if cred_valor and not cred_valor.startswith("{") and not Path(cred_valor).is_absolute():
                 cred_valor = str(raiz / cred_valor)
             self.google_calendar = ClienteGoogleCalendar(
                 calendar_id=self.config_botpress.google_calendar_id,
@@ -116,7 +116,7 @@ class ServicioMultiagenteComercial:
         self.df_tarifas = self.entorno.tarifasYMargenes.tarifas_historicas
         self.df_ofertas = self.entorno.tarifasYMargenes.historico_ofertas
 
-        # 3. Entrenamiento dinamico de modelos Scikit-Learn con los datos del negocio
+        # 4. Entrenamiento dinamico de modelos Scikit-Learn con los datos del negocio
         catalogo = self.entorno.plataformas.portafolio_servicios
         unidad = str(self.entorno.config_negocio.get("unidad_cantidad", "horas"))
         etiqueta_cantidad = str(
@@ -154,10 +154,10 @@ class ServicioMultiagenteComercial:
             )
         )
 
-        # 4. Organizacion MAS-ML
+        # 5. Organizacion MAS-ML
         self.organizacion = SistemaMultiagenteComercial(entorno=self.entorno)
 
-        # 5. Instanciacion de los 5 Agentes SPADE
+        # 6. Instanciacion de los 5 Agentes SPADE
         self.coordinador = AgenteCoordinador(
             entorno=self.entorno, organizacion=self.organizacion, monitor=self.monitor
         )
@@ -306,13 +306,17 @@ class ServicioMultiagenteComercial:
         estado_reserva = contexto_conversacion.get("estado_reserva", {})
         contexto_nlp = tipo_evento_sugerido
         if (
-            isinstance(estado_reserva, dict)
+            not tipo_evento_sugerido
+            and isinstance(estado_reserva, dict)
             and estado_reserva.get("paso") == "esperando_horario"
         ):
             contexto_nlp = "solicitud_agendamiento"
         elif (
-            parametros_acumulados.get("fecha_agendamiento_pendiente")
-            or parametros_acumulados.get("fecha_agendamiento_fecha")
+            not tipo_evento_sugerido
+            and (
+                parametros_acumulados.get("fecha_agendamiento_pendiente")
+                or parametros_acumulados.get("fecha_agendamiento_fecha")
+            )
         ):
             contexto_nlp = "solicitud_agendamiento"
         else:
@@ -358,7 +362,13 @@ class ServicioMultiagenteComercial:
             tipo_evento = "aceptar_cotizacion"
         elif (
             contexto_nlp == "solicitud_agendamiento"
-            and analisis_previo["intencion"] not in {"objecion_precio", "rechazo_compra"}
+            and analisis_previo["intencion"]
+            not in {
+                "objecion_precio",
+                "rechazo_compra",
+                "reclamo_critico",
+                "solicitud_cotizacion",
+            }
         ):
             tipo_evento = "solicitud_agendamiento"
         elif (

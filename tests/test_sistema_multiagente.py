@@ -3678,5 +3678,15 @@ def test_bateria_exhaustiva_escenarios_nlp_y_reglas() -> None:
     res_quince = modelo_foto.analizar_mensaje("Necesito quince fotos de producto")
     assert res_quince["parametros_extraidos"]["cantidad_fotos"] == 15
 
+    res_dia_tarde = modelo_foto.analizar_mensaje("Agendemos el 30 a las 3 de la tarde")
+    assert res_dia_tarde["parametros_extraidos"]["fecha_hora"].endswith("-30 15:00")
+
+    res_dia_manana = modelo_foto.analizar_mensaje("El día 30 a las 9 de la mañana")
+    assert res_dia_manana["parametros_extraidos"]["fecha_hora"].endswith("-30 09:00")
+
+    res_insulto = modelo_foto.analizar_mensaje("tu negocio es una mierda")
+    assert res_insulto["intencion"] == "reclamo_critico"
+    assert res_insulto["escalamiento_humano"] is True
+
     res_fuera = modelo_foto.analizar_mensaje("Hola, ustedes arreglan celulares o hacen plomería?")
     assert res_fuera["parametros_extraidos"].get("fuera_de_alcance") is True

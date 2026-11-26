@@ -55,15 +55,12 @@ HUMAN_REACTIVATION_API_KEY=admin_sma_2026
 # Opcional: clave gratuita de https://aistudio.google.com/apikey para redaccion natural
 # Si queda vacio o se agotan los tokens (HTTP 429), cae automaticamente a texto local verificado
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3-flash-preview
 HOST=0.0.0.0
 PORT=8000
 ```
 
-> **Nota sobre la tabla `agenda_bloques` en Supabase:** Si ejecutaste anteriormente una version previa del SQL que incluia `agenda_bloques`, entra al **SQL Editor** de Supabase y ejecuta una sola vez:
-> ```sql
-> DROP TABLE IF EXISTS agenda_bloques;
-> ```
+> **Nota sobre la tabla de citas en Supabase:** El esquema actual almacena todas las reservas en `public.agendamientos` (con proteccion anti-cruces GiST). Si alguna vez ejecutaste una version heredada que tenia `agenda_bloques`, puedes eliminarla con `DROP TABLE IF EXISTS agenda_bloques;`.
 
 ---
 
@@ -170,13 +167,10 @@ Despues de la tarjeta **Execute Code**, configura las salidas del nodo usando ta
 
 ## 4. Checklist de Prueba Final
 
-1. Abre el monitor web en `http://127.0.0.1:8000/` y verifica arriba las etiquetas:
-   - `BD: Supabase Cloud (PostgreSQL)`
-   - `Agenda: Google Calendar API v3`
-   - `Negocio` cargado correctamente
+1. Verifica en la consola de arranque (`python main.py`) los valores `Base de Datos: Supabase Cloud (PostgreSQL)` y `Agenda: Google Calendar API v3`, y abre el monitor web en `http://127.0.0.1:8000/` comprobando las etiquetas superiores de `Negocio` y `POST /api/botpress/mensaje (Activo)`.
 2. Escribe desde WhatsApp o Webchat de Botpress:
-   - Consulta inicial: *"Hola, que servicios ofrecen?"* -> debe listar los servicios reales de Supabase.
-   - Cotizacion: *"Quiero cotizar 3 sesiones de retrato corporativo"* (si usas `estudio_fotografia`) o *"Cotizar desarrollo web de 40 horas complejidad 3"* (si usas `tech_freelance`) -> debe liquidar con `RandomForestRegressor`.
+   - Consulta inicial: *"Hola, que servicios ofrecen?"* -> debe listar los servicios reales de Supabase sin revelar tarifas prematuramente.
+   - Cotizacion: *"Quiero cotizar 3 sesiones de retrato corporativo"* o *"Solo quiero 1 foto de producto"* (si usas `estudio_fotografia` -> tarifa configurada / motor unitario anti-perdida) o *"Cotizar desarrollo web de 40 horas complejidad 3"* (si usas `tech_freelance` -> `RandomForestRegressor`).
    - Negociacion: *"Esta muy costoso para mi presupuesto"* -> debe proponer descuento optimo con `KNeighborsRegressor`.
-   - Agenda: *"Quiero agendar cita para el 2026-11-20 09:00"* -> debe aparecer el evento creado en el **Google Calendar** real del dueno.
+   - Agenda: responde *"Acepto la cotizacion"*, suministra los 3 datos solicitados (**nombre completo**, **numero de identificacion** y **telefono**) e indica una fecha y hora futuras (ej. *"Manana a las 3pm"* o *"El 30 a las 3pm"*) -> debe persistirse en `public.agendamientos` y aparecer el evento creado en el **Google Calendar** real del dueno.
    - Escalamiento: *"Esto es una estafa, necesito hablar con el dueno ya"* -> debe llegar la notificacion al WhatsApp personal del dueno, quedar silenciado solo ese chat y mostrarse la alerta en `http://127.0.0.1:8000/` con el boton **Reactivar bot**.

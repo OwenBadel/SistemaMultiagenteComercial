@@ -35,7 +35,7 @@ class PlanExtraccionDatos:
 
 @dataclass
 class PlanCalculoTarifa:
-    """Plan MAS-ML para calcular costos mediante RandomForestRegressor."""
+    """Plan MAS-ML para calcular costos por tarifa comercial, economía unitaria o RandomForestRegressor."""
 
     nombre: str = "PlanCalculoTarifa"
     objetivo: str = "Aplicar la tarifa comercial y presentar un desglose comprensible"
@@ -446,12 +446,13 @@ class AgenteCotizaciones(AgenteBaseMASML):
                 payload_extra={
                     "id_cliente": id_cliente,
                     "canal": payload.get("canal", "WhatsApp"),
+                    "contexto_conversacion_id": payload.get("contexto_conversacion_id"),
                     "faltantes": validacion["faltantes"],
                 },
             )
             return
 
-        # Rama alt [Calculo exitoso] -> RandomForestRegressor + INFORM
+        # Rama alt [Calculo exitoso] -> Tarifa sesiones / Motor anti-perdida / RandomForest + INFORM
         cotizacion = self.ejecutarCalculoCostos(parametros)
         await self.enviarCotizacionFormal(
             comportamiento=comportamiento,

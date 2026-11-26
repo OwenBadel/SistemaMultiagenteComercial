@@ -851,7 +851,7 @@ class EntornoVirtualAtencion:
     ) -> Dict[str, Any]:
         """
         Evento dinamico del entorno: modifica en tiempo real la disponibilidad
-        en agendaVirtual y persiste en base de datos.
+        en agendaVirtual (y sincroniza en Google Calendar cuando esta activo).
         """
         resultado = self.agendaVirtual.cambiar_estado_bloque(
             fecha_hora=fecha_hora, estado=estado, cliente=cliente
@@ -954,17 +954,18 @@ class EntornoVirtualAtencion:
         metadata = datos.get("metadata", {})
         metadata = dict(metadata) if isinstance(metadata, dict) else {}
         datos_cliente = metadata.get("datos_cliente", {})
-        if isinstance(datos_cliente, dict):
-            datos_cliente_normalizados = validar_datos_cliente_reserva(
-                datos_cliente.get("nombre_cliente", nombre),
-                datos_cliente.get("cedula"),
-                datos_cliente.get("telefono"),
+        if not isinstance(datos_cliente, dict):
+            raise ValueError("Faltan los datos completos del cliente para la reserva.")
+        datos_cliente_normalizados = validar_datos_cliente_reserva(
+            datos_cliente.get("nombre_cliente", nombre),
+            datos_cliente.get("cedula"),
+            datos_cliente.get("telefono"),
+        )
+        if datos_cliente_normalizados["nombre_cliente"] != nombre:
+            raise ValueError(
+                "El nombre de la reserva debe coincidir con el dato recopilado."
             )
-            if datos_cliente_normalizados["nombre_cliente"] != nombre:
-                raise ValueError(
-                    "El nombre de la reserva debe coincidir con el dato recopilado."
-                )
-            metadata["datos_cliente"] = datos_cliente_normalizados
+        metadata["datos_cliente"] = datos_cliente_normalizados
         return {
             "id_cliente": id_cliente,
             "nombre_cliente": datos_cliente_normalizados["nombre_cliente"],

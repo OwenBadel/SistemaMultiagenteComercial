@@ -510,9 +510,12 @@
     let intentoAutenticacionRealizado = false;
 
     function escaparHtml(texto) {
-      const div = document.createElement('div');
-      div.textContent = String(texto ?? '');
-      return div.innerHTML;
+      return String(texto ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     function clasePerformativa(perf) {
@@ -593,7 +596,7 @@
             <strong>${escaparHtml(al.id_cliente)}</strong> (${escaparHtml(al.canal)})
             <div class="alerta-detalle">Motivo: ${escaparHtml(al.motivo_critico)} | ${escaparHtml(al.timestamp || '')}</div>
           </div>
-          ${al.resuelta ? '' : `<button type="button" class="btn-primario btn-compacto" onclick="reactivarCliente('${escaparHtml(al.id_cliente)}')">Reactivar bot</button>`}
+          ${al.resuelta ? '' : `<button type="button" class="btn-primario btn-compacto" data-cliente="${escaparHtml(al.id_cliente)}" onclick="reactivarCliente(this.dataset.cliente)">Reactivar bot</button>`}
         </div>
       `).join('');
     }

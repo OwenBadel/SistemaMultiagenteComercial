@@ -520,6 +520,7 @@ class AgenteVentas(AgenteBaseMASML):
                 f"{descuento:g}%",
                 f"${valor_final_esperado:,.0f}",
             ],
+            id_cliente=id_cliente,
         )
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": mensaje}
@@ -1209,26 +1210,28 @@ class AgenteVentas(AgenteBaseMASML):
                             }
                         )
                         return
-                raise
+                estado_reserva["paso"] = "nombre_cliente"
+                self.entorno.perfilesClientes.actualizar_estado_conversacion(
+                    id_cliente,
+                    contexto_id,
+                    {"estado_reserva": estado_reserva},
+                )
+                res = self.responderLenguajeNatural(
+                    "datos_reserva_requeridos",
+                    canal,
+                    id_cliente,
+                    "Para agendar necesito verificar tus datos completos. ¿Cuál es tu nombre y apellido?",
+                )
+                self.marcar_ciclo_completado(
+                    {"resultado": "datos_reserva_pendientes", "envio": res}
+                )
+                return
 
             estado_reserva.update(datos_cliente_reserva)
             estado_reserva["paso"] = "esperando_horario"
             self.entorno.perfilesClientes.actualizar_estado_conversacion(
                 id_cliente, contexto_id, {"estado_reserva": estado_reserva}
             )
-            if not fecha_hora:
-                mensaje = (
-                    f"Ya tengo el día {fecha_parcial}. ¿A qué hora te gustaría la cita?"
-                    if fecha_parcial
-                    else "¿Qué día y hora te gustaría reservar?"
-                )
-                res = self.responderLenguajeNatural(
-                    "fecha_agendamiento_requerida", canal, id_cliente, mensaje
-                )
-                self.marcar_ciclo_completado(
-                    {"resultado": "fecha_agendamiento_requerida", "envio": res}
-                )
-                return
 
             parametros_cliente = self.entorno.perfilesClientes.obtener_parametros_cotizacion(
                 id_cliente, contexto_id
@@ -1574,6 +1577,18 @@ class AgenteVentas(AgenteBaseMASML):
             )
             self.marcar_ciclo_completado(
                 {"resultado": "horarios_alternativos", "alternativas": alternativas, "envio": res}
+            )
+
+        elif perf == "REFUSE" and "requiere_cotizacion_aprobada" in contenido:
+            texto_req = (
+                "Antes de agendar una cita, necesitamos contar con una cotización "
+                "formal aprobada. Si ya la recibiste, responde «Acepto la cotización»."
+            )
+            res = self.responderLenguajeNatural(
+                "cotizacion_aprobacion_requerida", canal, id_cliente, texto_req
+            )
+            self.marcar_ciclo_completado(
+                {"resultado": "cotizacion_aprobacion_requerida", "envio": res}
             )
 
         elif perf == "REFUSE" and "fuera_de_alcance_operativo" in contenido:

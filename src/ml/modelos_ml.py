@@ -426,10 +426,11 @@ def _extraer_fecha_hora(
                     if mes_cand == 1:
                         anio_cand += 1
                 fecha_fija = (dia_mes, mes_cand, anio_cand)
-                texto_con_hora = (
-                    texto_norm[: match_solo_dia.start()]
-                    + " "
-                    + texto_norm[match_solo_dia.end() :]
+                texto_con_hora = re.sub(
+                    r"\b(?:el(?:\s+dia)?|dia)\s+" + str(dia_mes) + r"\b",
+                    " ",
+                    texto_con_hora,
+                    count=1,
                 )
 
     hora_explicita = _extraer_hora(texto_con_hora)
@@ -1305,9 +1306,12 @@ class ModeloCotizacionesRF:
         self.modelo.fit(X, y)
         pred_train = self.modelo.predict(X)
         self.r2_entrenamiento = float(r2_score(y, pred_train))
-        n_splits = min(5, max(2, len(self.df_tarifas)))
-        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-        self.r2_validacion = float(cross_val_score(self.modelo, X, y, cv=kf).mean())
+        if len(self.df_tarifas) >= 4:
+            n_splits = min(5, len(self.df_tarifas) // 2)
+            kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+            self.r2_validacion = float(cross_val_score(self.modelo, X, y, cv=kf).mean())
+        else:
+            self.r2_validacion = self.r2_entrenamiento
 
     def predecir_cotizacion(self, parametros_servicio: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1390,20 +1394,25 @@ class ModeloPromocionesKNN:
 
     def __init__(self, df_ofertas: pd.DataFrame) -> None:
         self.df_ofertas = df_ofertas.copy()
+        k_vecinos = min(5, max(1, len(self.df_ofertas)))
         self.pipeline = Pipeline(
             [
                 ("scaler", StandardScaler()),
-                ("knn", KNeighborsRegressor(n_neighbors=5, weights="distance")),
+                ("knn", KNeighborsRegressor(n_neighbors=k_vecinos, weights="distance")),
             ]
         )
         X = self.df_ofertas[self.FEATURES]
         y = self.df_ofertas["porcentaje_descuento_optimo"]
         self.pipeline.fit(X, y)
-        n_splits = min(5, max(2, len(self.df_ofertas)))
-        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-        self.r2_entrenamiento = float(
-            cross_val_score(self.pipeline, X, y, cv=kf).mean()
-        )
+        if len(self.df_ofertas) >= 10:
+            kf = KFold(n_splits=5, shuffle=True, random_state=42)
+            self.r2_entrenamiento = float(
+                cross_val_score(self.pipeline, X, y, cv=kf).mean()
+            )
+        elif len(self.df_ofertas) >= 2:
+            self.r2_entrenamiento = float(r2_score(y, self.pipeline.predict(X)))
+        else:
+            self.r2_entrenamiento = 0.0
 
     def predecir_descuento_optimo(
         self,

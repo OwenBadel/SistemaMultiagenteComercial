@@ -148,7 +148,7 @@ def test_traza_de_entrada_no_imprime_identidad_ni_texto_del_cliente() -> None:
     assert "mensaje_recibido" in texto_consola
     assert "573001112233" not in texto_consola
     assert "Nombre Privado" not in texto_consola
-    assert "private@example.com" not in texto_consola
+    assert "privado@example.com" not in texto_consola
 
 
 def test_enviar_fipa_registra_solo_despues_de_send_exitoso() -> None:
