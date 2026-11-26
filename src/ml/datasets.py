@@ -243,6 +243,10 @@ CORPUS_NLP_VENTAS: List[Tuple[str, str, str]] = [
     ("Pásame con un asesor humano ya mismo", "reclamo_critico", "hostil"),
     ("Necesito atención humana, tengo un problema grave con mi pago", "reclamo_critico", "hostil"),
     ("Qué servicio tan malo y grosero, quiero hablar con el dueño", "reclamo_critico", "hostil"),
+    ("Te odio, eres lo peor que me ha pasado", "reclamo_critico", "hostil"),
+    ("Tu negocio es una mierda, no sirven para nada", "reclamo_critico", "hostil"),
+    ("Qué basura de servicio, son un asco", "reclamo_critico", "hostil"),
+    ("Son unos ladrones e idiotas, qué vergüenza de atención", "reclamo_critico", "hostil"),
 ]
 
 

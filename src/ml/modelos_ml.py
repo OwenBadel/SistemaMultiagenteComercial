@@ -605,8 +605,13 @@ class ModeloNLPVentas:
         tono_ml = str(clases_tono[int(np.argmax(proba_tono))])
 
         palabras_hostiles = (
-            "robo", "me robaron", "estafa", "estafadores", "pesimo", "pésimo", "harto",
-            "porqueria", "porquería", "denunciar", "demanda", "superintendencia",
+            "robo", "me robaron", "ladron", "ladrones", "ratero", "estafa", "estafadores",
+            "pesimo", "pésimo", "harto", "porqueria", "porquería", "basura", "mierda",
+            "una mierda", "te odio", "los odio", "lo peor", "verguenza", "asqueroso",
+            "idiota", "imbecil", "imbécil", "estupido", "estúpido", "pendejo", "tarado",
+            "inutil", "inútil", "maldito", "hp", "gonorrea", "malparido", "carechimba",
+            "vayanse a la", "no sirven para nada", "me caen mal", "son un asco",
+            "denunciar", "demanda", "superintendencia",
             "furioso", "inaceptable", "devolucion", "devuelvan mi dinero", "enganado",
             "humano ya", "bot inutil", "bot inútil", "bot no sirve", "reclamo", "reclamar",
             "hablar con un humano", "hablar con una persona", "hablar con el dueno",

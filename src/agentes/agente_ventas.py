@@ -380,9 +380,16 @@ class AgenteVentas(AgenteBaseMASML):
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": texto_catalogo}
         )
-        self.registrar_accion("enviarCatalogoVisual(portafolio_servicios)", f"canal={canal}")
+        if tipo_nlg == "saludo_bienvenida":
+            accion_entorno = "responderLenguajeNatural(saludo_bienvenida)"
+        elif tipo_nlg == "seguimiento_consulta_especifica":
+            accion_entorno = "responderLenguajeNatural(asesoria_consulta)"
+        else:
+            accion_entorno = "enviarCatalogoVisual(portafolio_servicios)"
+
+        self.registrar_accion(accion_entorno, f"canal={canal}")
         res = self.entorno.registrarRespuestaEntorno(
-            accion="enviarCatalogoVisual(portafolio_servicios)",
+            accion=accion_entorno,
             canal=canal,
             id_cliente=id_cliente,
             contenido=texto_catalogo,
