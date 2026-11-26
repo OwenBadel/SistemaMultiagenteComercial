@@ -255,13 +255,13 @@ class AgenteVentas(AgenteBaseMASML):
             else ""
         )
         historial_reciente: list[Dict[str, Any]] = []
-        if id_cliente:
+        if id_cliente and tipo_respuesta != "saludo_bienvenida":
             perfil_cli = self.entorno.perfilesClientes.perfiles.get(id_cliente, {})
             for item in perfil_cli.get("historial_interacciones", [])[-6:]:
                 txt = str(item.get("texto") or item.get("contenido") or "").strip()
                 if txt:
                     historial_reciente.append({"rol": item.get("rol", "cliente"), "texto": txt})
-        if not historial_reciente:
+        if not historial_reciente and tipo_respuesta != "saludo_bienvenida":
             historial_reciente = list(self.creencias.get("historialCharla", []))
         return self.generador_llm.redactar_respuesta(
             tipo_respuesta=tipo_respuesta,
