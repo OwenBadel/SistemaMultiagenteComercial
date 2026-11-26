@@ -244,6 +244,7 @@ class AgenteVentas(AgenteBaseMASML):
         tipo_respuesta: str,
         texto_base: str,
         hechos_obligatorios: Optional[list[str]] = None,
+        id_cliente: Optional[str] = None,
     ) -> str:
         """Usa Gemini para redactar naturalmente conservando hechos verificados y fallback."""
         if self.generador_llm is None or not self.generador_llm.activo:
@@ -253,12 +254,21 @@ class AgenteVentas(AgenteBaseMASML):
             if self.creencias.get("mensajesEntrantes")
             else ""
         )
+        historial_reciente: list[Dict[str, Any]] = []
+        if id_cliente:
+            perfil_cli = self.entorno.perfilesClientes.perfiles.get(id_cliente, {})
+            for item in perfil_cli.get("historial_interacciones", [])[-6:]:
+                txt = str(item.get("texto") or item.get("contenido") or "").strip()
+                if txt:
+                    historial_reciente.append({"rol": item.get("rol", "cliente"), "texto": txt})
+        if not historial_reciente:
+            historial_reciente = list(self.creencias.get("historialCharla", []))
         return self.generador_llm.redactar_respuesta(
             tipo_respuesta=tipo_respuesta,
             texto_base=texto_base,
             contexto_negocio=self.entorno.config_negocio,
             mensaje_cliente=ultimo_msg,
-            historial_reciente=list(self.creencias.get("historialCharla", [])),
+            historial_reciente=historial_reciente,
             hechos_obligatorios=hechos_obligatorios,
         )
 
@@ -310,16 +320,18 @@ class AgenteVentas(AgenteBaseMASML):
             else ""
         )
         ultimo_msg_cf = ultimo_msg.casefold()
+        perfil_cli = self.entorno.perfilesClientes.perfiles.get(id_cliente, {})
+        historial_cli = perfil_cli.get("historial_interacciones", [])
         ya_vio_catalogo = any(
-            t.get("rol") == "agente_ventas"
-            for t in self.creencias.get("historialCharla", [])
+            t.get("rol") == "agente_ventas" and "\n- " in str(t.get("contenido", ""))
+            for t in historial_cli
         )
         pide_algo_especifico_o_no_esta = any(
             p in ultimo_msg_cf
             for p in ("no esta", "no está", "ninguno", "otra cosa", "familiar", "familia", "boda", "quince")
         )
 
-        if self._es_saludo_simple(ultimo_msg) and not ya_vio_catalogo:
+        if self._es_saludo_simple(ultimo_msg):
             tipo_nlg = "saludo_bienvenida"
             texto_base = (
                 f"¡Hola! Bienvenido a {nombre_negocio}, nos especializamos en {rubro}. "
@@ -361,6 +373,7 @@ class AgenteVentas(AgenteBaseMASML):
             tipo_respuesta=tipo_nlg,
             texto_base=texto_base_nlg,
             hechos_obligatorios=hechos_catalogo,
+            id_cliente=id_cliente,
         )
         if texto_catalogo == texto_base_nlg and tipo_nlg == "seguimiento_consulta_especifica":
             texto_catalogo = texto_base
