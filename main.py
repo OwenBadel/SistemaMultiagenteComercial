@@ -31,6 +31,7 @@ if str(RAIZ_PROYECTO) not in sys.path:
 from src.escenarios.orquestador_escenarios import ServicioMultiagenteComercial
 from src.integracion_botpress.configuracion import ConfiguracionBotpress
 from src.integracion_botpress.servidor_botpress import crear_app_botpress
+from src.ml.motor_llama import asegurar_entorno_llama
 
 
 def _construir_parser() -> argparse.ArgumentParser:
@@ -38,7 +39,7 @@ def _construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Servidor productivo SistemaMultiagenteComercial "
-            "(SPADE + Scikit-Learn + Botpress)."
+            "(SPADE + Meta Llama/Ollama + Scikit-Learn + Botpress)."
         )
     )
     parser.add_argument(
@@ -91,8 +92,12 @@ def _imprimir_estado_servidor(
         f"http://{host_visible}:{config_botpress.port}/api/botpress/mensaje",
     )
     tabla.add_row(
-        "Redaccion Natural (NLG)",
-        servicio.generador_llm.estado_actual()["modo"],
+        "Motor Ventas (LLM Local)",
+        servicio.motor_llama.estado_actual()["modo"],
+    )
+    tabla.add_row(
+        "Modelos ML Especialistas",
+        f"RandomForest R2={servicio.modelo_rf.r2_entrenamiento:.4f} | KNN R2={servicio.modelo_knn.r2_entrenamiento:.4f}",
     )
     tabla.add_row(
         "Seguridad API Key (.env)",
@@ -109,7 +114,7 @@ def _imprimir_estado_servidor(
         Panel(
             tabla,
             title="SistemaMultiagenteComercial - Servicio Activo",
-            subtitle="SPADE + Scikit-Learn + Botpress + Supabase + Google Calendar",
+            subtitle="SPADE + Meta Llama (Ollama) + Scikit-Learn (RF/KNN) + Botpress + Supabase + Google Calendar",
             border_style="cyan",
         )
     )
@@ -119,8 +124,21 @@ async def _ejecutar_servidor(
     config_botpress: ConfiguracionBotpress,
     usar_xmpp_embebido: bool,
 ) -> None:
-    """Inicializa los 5 agentes SPADE y sirve FastAPI + Uvicorn hasta recibir cierre."""
+    """Aprovisiona Llama local, inicializa los 5 agentes SPADE y sirve FastAPI + Uvicorn."""
     consola = Console()
+    estado_llama = asegurar_entorno_llama(
+        host=config_botpress.ollama_host,
+        modelo=config_botpress.llama_model,
+        auto_instalar=config_botpress.llama_auto_install,
+        consola=consola,
+    )
+    if estado_llama.get("disponible"):
+        config_botpress.llama_model = str(estado_llama["modelo"])
+    else:
+        consola.print(
+            f"[yellow]Aviso Llama local: {estado_llama.get('detalle', 'Ollama no disponible')}[/yellow]"
+        )
+
     servicio = ServicioMultiagenteComercial(
         config_botpress=config_botpress,
         usar_xmpp_embebido=usar_xmpp_embebido,

@@ -297,12 +297,19 @@ def crear_app_botpress(servicio_sma: ServicioMultiagenteComercial) -> FastAPI:
                 "unidad_cantidad": cfg_neg.get("unidad_cantidad", "horas"),
                 "moneda": cfg_neg.get("moneda", "COP"),
             },
+            "modelos_ia": {
+                "motor_ventas_llama": servicio_sma.motor_llama.estado_actual(),
+                "random_forest_r2": round(servicio_sma.modelo_rf.r2_entrenamiento, 4),
+                "knn_r2_cv": round(servicio_sma.modelo_knn.r2_entrenamiento, 4),
+                "registros_tarifas": len(servicio_sma.df_tarifas),
+                "registros_ofertas": len(servicio_sma.df_ofertas),
+            },
             "modelos_ml": {
                 "random_forest_r2": round(servicio_sma.modelo_rf.r2_entrenamiento, 4),
                 "knn_r2_cv": round(servicio_sma.modelo_knn.r2_entrenamiento, 4),
                 "registros_tarifas": len(servicio_sma.df_tarifas),
                 "registros_ofertas": len(servicio_sma.df_ofertas),
-                "generador_llm": servicio_sma.generador_llm.estado_actual(),
+                "motor_llama": servicio_sma.motor_llama.estado_actual(),
             },
             "agentes": [
                 {

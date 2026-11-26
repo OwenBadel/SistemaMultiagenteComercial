@@ -1,7 +1,7 @@
 """
 Implementacion del AgenteVentas (<<play>> rol EjecutivoVentas).
-Arquitectura: Con aprendizaje (NLP para intencion y sentimiento/tono del cliente:
-interesado, indeciso u hostil) y basado en utilidad.
+Arquitectura: Modelo generativo local (Meta Llama via Ollama para NLU con
+salidas estructuradas JSON Schema y NLG conversacional) y basado en utilidad.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from spade.behaviour import CyclicBehaviour, OneShotBehaviour
@@ -19,12 +19,11 @@ from src.agentes.base_agente import JID_COORDINADOR, AgenteBaseMASML
 from src.comunicacion.fipa_acl import extraer_payload_fipa
 from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
-from src.ml.generador_llm import GeneradorDialogoGemini
 from src.ml.modelos_ml import (
-    ModeloNLPVentas,
     _es_objecion_precio_explicita,
     normalizar_unidad_comercial,
 )
+from src.ml.motor_llama import MotorLlamaVentas
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 from src.reglas_comerciales import promocion_elegible, validar_datos_cliente_reserva
 
@@ -134,8 +133,9 @@ class PlanCierreConPromo:
 class AgenteVentas(AgenteBaseMASML):
     """
     <<agent>> AgenteVentas:
-    Puerta única de entrada al cliente. Integra NLP con Scikit-Learn y coordina
-    el escalamiento al AgenteCoordinador.
+    Puerta unica de entrada al cliente. Integra el motor generativo local
+    Meta Llama (Ollama) para comprension NLU y redaccion NLG, y coordina
+    el escalamiento al AgenteCoordinador via FIPA-ACL.
     """
 
     def __init__(
@@ -143,8 +143,7 @@ class AgenteVentas(AgenteBaseMASML):
         entorno: EntornoVirtualAtencion,
         organizacion: SistemaMultiagenteComercial,
         monitor: MonitorFIPAACL,
-        modelo_nlp: ModeloNLPVentas,
-        generador_llm: Optional[GeneradorDialogoGemini] = None,
+        motor_llama: MotorLlamaVentas,
         jid: str = "ventas@localhost",
         password: str = "sma_2026",
     ) -> None:
@@ -153,13 +152,12 @@ class AgenteVentas(AgenteBaseMASML):
             password=password,
             nombre_agente="AgenteVentas",
             nombre_rol="EjecutivoVentas",
-            arquitectura_tipo="Con aprendizaje (NLP + LLM NLG) y basado en utilidad",
+            arquitectura_tipo="Generativo local (LLM Llama / Ollama) y basado en utilidad",
             entorno=entorno,
             organizacion=organizacion,
             monitor=monitor,
         )
-        self.modelo_nlp = modelo_nlp
-        self.generador_llm = generador_llm
+        self.motor_llama = motor_llama
         self.creencias: Dict[str, Any] = {
             "mensajesEntrantes": [],
             "historialCharla": [],
@@ -222,20 +220,28 @@ class AgenteVentas(AgenteBaseMASML):
         tipo_evento: Optional[str] = None,
         campos_pendientes: Optional[list[str]] = None,
         parametros_acumulados: Optional[Dict[str, Any]] = None,
+        historial_reciente: Optional[List[Dict[str, Any]]] = None,
+        estado_conversacion: Optional[Dict[str, Any]] = None,
+        analisis_precalculado: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Clasifica intención y detecta tonoCliente usando ModeloNLPVentas."""
-        analisis = self.modelo_nlp.analizar_mensaje(
-            texto=texto,
-            contexto_tipo=tipo_evento,
-            campos_pendientes=campos_pendientes,
-            parametros_acumulados=parametros_acumulados,
-        )
+        """Clasifica intencion, tono y parametros del cliente usando MotorLlamaVentas (Llama local)."""
+        if analisis_precalculado is not None:
+            analisis = dict(analisis_precalculado)
+        else:
+            analisis = self.motor_llama.analizar_mensaje(
+                texto=texto,
+                contexto_tipo=tipo_evento,
+                campos_pendientes=campos_pendientes,
+                parametros_acumulados=parametros_acumulados,
+                historial_reciente=historial_reciente,
+                estado_conversacion=estado_conversacion,
+            )
         self.creencias["mensajesEntrantes"].append(texto)
         self.creencias["historialCharla"].append({"rol": "cliente", "texto": texto})
         self.creencias["tonoCliente"] = analisis["tono_cliente"]
         self.registrar_accion(
             "interpretarLenguajeNatural()",
-            f"intencion={analisis['intencion']} | tonoCliente={analisis['tono_cliente']}",
+            f"motor={analisis.get('motor_nlu', 'llama')} | intencion={analisis['intencion']} | tonoCliente={analisis['tono_cliente']}",
         )
         return analisis
 
@@ -246,8 +252,8 @@ class AgenteVentas(AgenteBaseMASML):
         hechos_obligatorios: Optional[list[str]] = None,
         id_cliente: Optional[str] = None,
     ) -> str:
-        """Usa Gemini para redactar naturalmente conservando hechos verificados y fallback."""
-        if self.generador_llm is None or not self.generador_llm.activo:
+        """Usa Llama local (Ollama) para redactar naturalmente conservando hechos verificados."""
+        if not self.motor_llama.activo:
             return texto_base
         ultimo_msg = (
             str(self.creencias["mensajesEntrantes"][-1])
@@ -255,15 +261,16 @@ class AgenteVentas(AgenteBaseMASML):
             else ""
         )
         historial_reciente: list[Dict[str, Any]] = []
-        if id_cliente and tipo_respuesta != "saludo_bienvenida":
+        aislar_historial = tipo_respuesta in {"saludo_bienvenida", "catalogo_servicios"}
+        if id_cliente and not aislar_historial:
             perfil_cli = self.entorno.perfilesClientes.perfiles.get(id_cliente, {})
             for item in perfil_cli.get("historial_interacciones", [])[-6:]:
                 txt = str(item.get("texto") or item.get("contenido") or "").strip()
                 if txt:
                     historial_reciente.append({"rol": item.get("rol", "cliente"), "texto": txt})
-        if not historial_reciente and tipo_respuesta != "saludo_bienvenida":
+        if not historial_reciente and not aislar_historial:
             historial_reciente = list(self.creencias.get("historialCharla", []))
-        return self.generador_llm.redactar_respuesta(
+        return self.motor_llama.redactar_respuesta(
             tipo_respuesta=tipo_respuesta,
             texto_base=texto_base,
             contexto_negocio=self.entorno.config_negocio,
@@ -279,7 +286,7 @@ class AgenteVentas(AgenteBaseMASML):
             "horas_estimadas": "cuántas horas aproximadas estimas",
             "sesiones_requeridas": "cuántas sesiones necesitas",
             "cantidad_unidades": f"la cantidad de {unidad} que necesitas",
-            "complejidad": "el nivel de complejidad (nivel 1 a 5)",
+            "complejidad": "qué nivel de alcance o detalle necesitas (por ejemplo: básico, intermedio o avanzado)",
         }
         return mapa.get(campo, campo.replace("_", " "))
 
@@ -303,7 +310,13 @@ class AgenteVentas(AgenteBaseMASML):
         )
         return any(s in t for s in saludos) and len(t.split()) <= 6
 
-    def enviarCatalogoVisual(self, canal: str, id_cliente: str) -> Dict[str, Any]:
+    def enviarCatalogoVisual(
+        self,
+        canal: str,
+        id_cliente: str,
+        forzar_catalogo: bool = False,
+        es_saludo_detectado: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         """Envia bienvenida de negocio o paquetes sin precios (los precios los da AgenteCotizaciones)."""
         cfg = self.entorno.config_negocio
         catalogo = self.entorno.plataformas.portafolio_servicios
@@ -311,7 +324,7 @@ class AgenteVentas(AgenteBaseMASML):
         rubro = str(cfg.get("rubro", "servicios profesionales"))
         unidad = str(cfg.get("unidad_cantidad", "unidades"))
         lineas_sin_precio = [
-            f"- {meta.get('nombre', clave)}"
+            f"- {meta.get('nombre', clave)}: {meta.get('descripcion', '')}".rstrip(": ")
             for clave, meta in catalogo.items()
         ]
         ultimo_msg = (
@@ -322,16 +335,40 @@ class AgenteVentas(AgenteBaseMASML):
         ultimo_msg_cf = ultimo_msg.casefold()
         perfil_cli = self.entorno.perfilesClientes.perfiles.get(id_cliente, {})
         historial_cli = perfil_cli.get("historial_interacciones", [])
+        nombres_catalogo_cf = [
+            str(meta.get("nombre", "")).casefold()
+            for meta in catalogo.values()
+            if meta.get("nombre")
+        ]
         ya_vio_catalogo = any(
-            t.get("rol") == "agente_ventas" and "\n- " in str(t.get("contenido", ""))
+            t.get("rol") == "agente_ventas"
+            and (
+                "\n- " in str(t.get("contenido", ""))
+                or "\n* " in str(t.get("contenido", ""))
+                or sum(
+                    1
+                    for nom in nombres_catalogo_cf
+                    if nom in str(t.get("contenido", "")).casefold()
+                ) >= 2
+            )
             for t in historial_cli
         )
+        tiene_cot_previa = perfil_cli.get("ultima_cotizacion") is not None
         pide_algo_especifico_o_no_esta = any(
             p in ultimo_msg_cf
-            for p in ("no esta", "no está", "ninguno", "otra cosa", "familiar", "familia", "boda", "quince")
+            for p in (
+                "no esta", "no está", "ninguno", "otra cosa", "familiar",
+                "familia", "boda", "quince", "cuantas fotos", "cuántas fotos",
+                "que incluye", "qué incluye", "en base a que", "en base a qué",
+            )
+        )
+        es_saludo = (
+            bool(es_saludo_detectado)
+            if es_saludo_detectado is not None
+            else self._es_saludo_simple(ultimo_msg)
         )
 
-        if self._es_saludo_simple(ultimo_msg):
+        if es_saludo and not forzar_catalogo:
             tipo_nlg = "saludo_bienvenida"
             texto_base = (
                 f"¡Hola! Bienvenido a {nombre_negocio}, nos especializamos en {rubro}. "
@@ -340,9 +377,9 @@ class AgenteVentas(AgenteBaseMASML):
             texto_base_nlg = texto_base
             hechos_catalogo = [nombre_negocio]
         elif (
-            self.generador_llm is not None
-            and self.generador_llm.activo
-            and (ya_vio_catalogo or pide_algo_especifico_o_no_esta)
+            not forzar_catalogo
+            and self.motor_llama.activo
+            and (ya_vio_catalogo or tiene_cot_previa or pide_algo_especifico_o_no_esta)
         ):
             tipo_nlg = "seguimiento_consulta_especifica"
             hechos_catalogo = []
@@ -611,7 +648,7 @@ class AgenteVentas(AgenteBaseMASML):
             else []
         )
         if esperando_parametros and not campos_pendientes:
-            campos_pendientes = self.modelo_nlp.campos_cotizacion_pendientes(
+            campos_pendientes = self.motor_llama.campos_cotizacion_pendientes(
                 parametros_perfil
             )
         contexto_nlp = tipo_evento
@@ -622,6 +659,22 @@ class AgenteVentas(AgenteBaseMASML):
             tipo_evento=contexto_nlp,
             campos_pendientes=campos_pendientes,
             parametros_acumulados=parametros_perfil,
+            historial_reciente=perfil.get("historial_interacciones", [])[-6:],
+            estado_conversacion={
+                "tiene_cotizacion": self.entorno.perfilesClientes.tiene_cotizacion(
+                    id_cliente, contexto_id
+                ),
+                "ultima_cotizacion": (
+                    contexto_conversacion.get("ultima_cotizacion")
+                    if contexto_id
+                    else perfil.get("ultima_cotizacion")
+                ),
+                "cotizacion_aprobada": self.entorno.perfilesClientes.cotizacion_aprobada(
+                    id_cliente, contexto_id
+                ),
+                "paso_reserva": estado_reserva.get("paso"),
+            },
+            analisis_precalculado=payload_evt.get("analisis_llama_turno"),
         )
         self.entorno.perfilesClientes.actualizar_perfil(
             id_cliente, tono_actual=analisis["tono_cliente"]
@@ -796,6 +849,46 @@ class AgenteVentas(AgenteBaseMASML):
             )
             return
 
+        texto_norm_h = unicodedata.normalize("NFD", texto.casefold())
+        texto_norm_h = "".join(
+            c for c in texto_norm_h if unicodedata.category(c) != "Mn"
+        )
+        if (
+            estado_reserva.get("paso") == "esperando_horario"
+            and alternativas_ofrecidas
+            and re.search(
+                r"\b(?:am|a\.?\s*m\.?)\s+o\s+(?:pm|p\.?\s*m\.?)\b"
+                r"|\b(?:pm|p\.?\s*m\.?)\s+o\s+(?:am|a\.?\s*m\.?)\b"
+                r"|\bmanana\s+o\s+(?:tarde|noche)\b",
+                texto_norm_h,
+            )
+        ):
+            def _formato_12h(slot: str) -> str:
+                try:
+                    dt = datetime.strptime(slot.strip(), "%Y-%m-%d %H:%M")
+                    suf = "a. m." if dt.hour < 12 else "p. m."
+                    h12 = dt.hour % 12 or 12
+                    return f"{slot} ({h12}:{dt.minute:02d} {suf})"
+                except ValueError:
+                    return slot
+
+            opciones_legibles = ", ".join(_formato_12h(s) for s in alternativas_ofrecidas)
+            mensaje = (
+                f"Los horarios disponibles que te propusimos son: {opciones_legibles}. "
+                "¿Cuál de ellos confirmamos?"
+            )
+            res = self.responderLenguajeNatural(
+                "aclarar_horario_alternativo",
+                canal,
+                id_cliente,
+                mensaje,
+                hechos_obligatorios=alternativas_ofrecidas,
+            )
+            self.marcar_ciclo_completado(
+                {"resultado": "aclarar_horario_alternativo", "envio": res}
+            )
+            return
+
         esperando_params = esperando_parametros
         era_preperfilado = (
             esperando_params
@@ -893,7 +986,7 @@ class AgenteVentas(AgenteBaseMASML):
             faltantes_ahora = (
                 []
                 if params.get("fuera_de_alcance")
-                else self.modelo_nlp.campos_cotizacion_pendientes(params)
+                else self.motor_llama.campos_cotizacion_pendientes(params)
             )
             # Perfilamiento previo en Ventas: si eligio un paquete o no pidio cotizacion explicita
             # todavia (y no ha ignorado una pregunta previa), pregunta los datos ANTES de escalar
@@ -982,7 +1075,7 @@ class AgenteVentas(AgenteBaseMASML):
                 )
             return
 
-        # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual
+        # Paso 1 (Atencion Inicial): Consulta de servicio -> envia catalogo visual o detalle del paquete
         if (
             estado_reserva.get("paso") != "esperando_horario"
             and (
@@ -990,16 +1083,69 @@ class AgenteVentas(AgenteBaseMASML):
                 or analisis["intencion"] == "consulta_servicio"
             )
         ):
-            if esperando_parametros and (
+            es_cat = bool(analisis.get("es_pregunta_catalogo")) or (
                 "catalogo" in texto.casefold()
                 or "catálogo" in texto.casefold()
                 or "portafolio" in texto.casefold()
-            ):
+            )
+            if esperando_parametros and es_cat:
                 self.entorno.perfilesClientes.limpiar_parametros_cotizacion_pendientes(
                     id_cliente,
                     contexto_id,
                 )
-            res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
+            tipo_serv_consulta = str(
+                parametros_extraidos.get("tipo_servicio") or ""
+            ).strip()
+            catalogo_serv = self.entorno.plataformas.portafolio_servicios
+            if not tipo_serv_consulta and not analisis.get("es_saludo_simple"):
+                txt_cf = unicodedata.normalize("NFD", texto.casefold())
+                txt_cf = "".join(c for c in txt_cf if unicodedata.category(c) != "Mn")
+                for clave_c, meta_c in catalogo_serv.items():
+                    nom_c = unicodedata.normalize("NFD", str(meta_c.get("nombre", "")).casefold())
+                    nom_c = "".join(c for c in nom_c if unicodedata.category(c) != "Mn")
+                    if nom_c and nom_c in txt_cf:
+                        tipo_serv_consulta = clave_c
+                        es_cat = False
+                        break
+            if (
+                not es_cat
+                and not analisis.get("es_saludo_simple")
+                and tipo_serv_consulta in catalogo_serv
+            ):
+                meta_serv = catalogo_serv[tipo_serv_consulta]
+                nombre_serv = str(meta_serv.get("nombre", tipo_serv_consulta))
+                desc_serv = str(
+                    meta_serv.get("descripcion")
+                    or "Servicio profesional adaptado a tus requerimientos."
+                )
+                unidad_serv = str(
+                    meta_serv.get(
+                        "unidad_cantidad",
+                        self.entorno.config_negocio.get("unidad_cantidad", "sesiones"),
+                    )
+                )
+                texto_detalle = (
+                    f"El servicio {nombre_serv} incluye: {desc_serv} "
+                    f"(sin dar precios todavia). Si deseas una cotizacion formal, "
+                    f"cuentame cuantas {unidad_serv} necesitas."
+                )
+                res = self.responderLenguajeNatural(
+                    "asesoria_servicio_especifico",
+                    canal,
+                    id_cliente,
+                    texto_detalle,
+                    hechos_obligatorios=[nombre_serv],
+                )
+                self.marcar_ciclo_completado(
+                    {"accion": "asesoria_servicio", "servicio": tipo_serv_consulta, "respuesta": res}
+                )
+                return
+            res = self.enviarCatalogoVisual(
+                canal=canal,
+                id_cliente=id_cliente,
+                forzar_catalogo=es_cat,
+                es_saludo_detectado=analisis.get("es_saludo_simple"),
+            )
             self.marcar_ciclo_completado(
                 {"accion": "catalogo_enviado", "respuesta": res}
             )
@@ -1020,7 +1166,7 @@ class AgenteVentas(AgenteBaseMASML):
             id_cliente, contexto_id
         )
 
-        # La predicción ML nunca basta para iniciar una negociación.
+        # Solo una objecion de precio verificada inicia la negociacion de promociones.
         if (
             _es_objecion_precio_explicita(texto)
             and (tipo_evento == "objecion_precio" or analisis["intencion"] == "objecion_precio")
@@ -1604,14 +1750,12 @@ class AgenteVentas(AgenteBaseMASML):
             elif google_estado == "no_configurado":
                 texto_cita = (
                     f"Cita guardada exitosamente y confirmada para el {fecha_hora} "
-                    "en la agenda del negocio. "
-                    "Google Calendar no está configurado."
+                    "en la agenda del negocio."
                 )
             else:
                 texto_cita = (
                     f"Cita guardada exitosamente y confirmada para el {fecha_hora} "
-                    "en la agenda del negocio. "
-                    f"Estado de Google Calendar: {google_estado}."
+                    "en la agenda del negocio."
                 )
             res = self.responderLenguajeNatural(
                 "confirmacion_cita",

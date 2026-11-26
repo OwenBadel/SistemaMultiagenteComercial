@@ -1,6 +1,6 @@
 # SistemaMultiagenteComercial
 
-Sistema multiagente comercial en Python construido con **SPADE**, **Scikit-Learn**, **FastAPI**, **Supabase**, **Google Calendar API v3** y **Botpress**. Disenado para operar de forma generica con cualquier trabajador independiente o negocio leyendo su catalogo, reglas comerciales, precios historicos y configuracion directamente desde base de datos en la nube.
+Sistema multiagente comercial en Python construido con **SPADE**, **Meta Llama local (Ollama)**, **Scikit-Learn**, **FastAPI**, **Supabase**, **Google Calendar API v3** y **Botpress**. Disenado para operar de forma generica con cualquier trabajador independiente o negocio leyendo su catalogo, reglas comerciales, precios historicos y configuracion directamente desde base de datos en la nube.
 
 ---
 
@@ -18,16 +18,16 @@ Cliente (WhatsApp / Webchat / Instagram / Messenger)
 
 1. **Atencion multicanal via Botpress:** Todo mensaje entrante de un cliente llega al endpoint `POST /api/botpress/mensaje`.
 2. **Negocio 100% definido por base de datos:** Al iniciar, el sistema carga desde Supabase (`NEGOCIO_ID`) el rubro, moneda, unidad de cobro (`horas`, `sesiones`, etc.), catalogo de servicios, palabras clave, margenes minimos y topes de descuento.
-3. **Procesamiento colaborativo en SPADE + Scikit-Learn:** Los agentes analizan la intencion del cliente, muestran el portafolio sin revelar tarifas prematuramente, liquidan cotizaciones (tarifario por sesiones, motor de economia unitaria anti-perdida para solicitudes a medida/fraccionadas y `RandomForestRegressor` para proyectos por horas), calculan incentivos con `KNeighborsRegressor`, consultan/reservan citas reales en Google Calendar + Supabase y ejecutan escalamiento **Human-in-the-Loop** por chat cuando detectan un caso critico.
+3. **Procesamiento colaborativo en SPADE + Llama Local + Scikit-Learn:** `AgenteVentas` utiliza un modelo generativo local **Meta Llama** (vía Ollama con salidas estructuradas JSON Schema) para comprender la intención, tono y parámetros del cliente y redactar respuestas naturales sin depender de claves en la nube ni cuotas HTTP 429; `AgenteCotizaciones` liquida presupuestos (tarifario por sesiones, motor de economía unitaria anti-pérdida y `RandomForestRegressor` para proyectos por horas); `AgentePromociones` calcula incentivos con `KNeighborsRegressor`; `AgenteAgendamientos` consulta/reserva citas reales en Google Calendar + Supabase; y `AgenteCoordinador` ejecuta control **Human-in-the-Loop** por chat cuando detecta un caso crítico.
 4. **Control Human-in-the-Loop aislado por chat:** Si un cliente entra en atencion humana, el sistema pausa unicamente ese `id_cliente`, marca `notificar_dueno: true` para que Botpress avise al WhatsApp personal del dueno, y devuelve `responder_al_cliente: false` en mensajes posteriores mientras el dueno responde desde su WhatsApp corporativo. Desde el monitor web (`GET /`) se puede reactivar la automatizacion al terminar.
 
 ---
 
-## 2. Agentes, Capacidades, Arquitectura y Modelos de Machine Learning
+## 2. Agentes, Capacidades, Arquitectura y Modelos de IA
 
-| Agente | Rol | Que es capaz de hacer | Arquitectura | Modelo de Machine Learning |
+| Agente | Rol | Que es capaz de hacer | Arquitectura | Motor de IA / Machine Learning |
 | :--- | :--- | :--- | :--- | :--- |
-| `AgenteVentas` | `EjecutivoVentas` | Unica puerta conversacional con el cliente. Interpreta mensajes, detecta tono (`interesado`, `indeciso`, `hostil`), extrae parametros dinamicamente segun el catalogo de BD, envia el portafolio y redacta respuestas naturales para cotizaciones, descuentos, citas o cierres. | Con aprendizaje (NLU + NLG) y basado en utilidad | **Scikit-Learn** (`TF-IDF + LogisticRegression`) para clasificacion determinista, extraccion de entidades y `nivel_indecision` + **Gemini API** (NLG opcional con validador anti-alucinacion y circuit breaker ante HTTP 429/timeout) |
+| `AgenteVentas` | `EjecutivoVentas` | Unica puerta conversacional con el cliente. Interpreta mensajes en contexto, detecta tono (`interesado`, `indeciso`, `hostil`), extrae parametros dinamicamente segun el catalogo de BD, pre-perfila datos faltantes, envia el portafolio y redacta respuestas naturales con validador anti-alucinacion. | Generativo local (LLM Llama / Ollama) y basado en utilidad | **Meta Llama Local via Ollama** (`llama3.1:8b` en GPU >= 6 GB VRAM o `llama3.2:3b` en CPU) con **Structured Outputs (JSON Schema)** para NLU + redaccion NLG local (auto-instalacion automatica en arranque) |
 | `AgenteCoordinador` | `Coordinador` | Orquesta turnos entre especialistas, enruta peticiones, audita propuestas comerciales y descuentos frente al margen minimo anti-perdida configurado en BD y suspende la automatizacion de un chat escalandolo al dueno ante casos criticos. | Basado en utilidad | Evaluacion racional de utilidad y piso minimo de rentabilidad sobre margenes configurados en BD |
 | `AgenteCotizaciones` | `LiquidadorCotizaciones` | Valida requisitos obligatorios segun el servicio solicitado (pidiendo aclaraciones si faltan datos) y calcula cotizaciones formales con desglose economico usando tarifa por sesiones, economia unitaria anti-perdida (solicitudes a medida/fraccionadas) o el historico del negocio. | Con aprendizaje y basado en metas | **RandomForestRegressor** (Scikit-Learn) entrenado con `tarifas_historicas` (servicios por horas) + tarifa configurada y motor unitario anti-perdida (sesiones) |
 | `AgentePromociones` | `AnalistaPromociones` | Evalua promociones vigentes y propone el porcentaje optimo de descuento ante objeciones de precio, equilibrando probabilidad de cierre y margen de ganancia. | Con aprendizaje y basado en utilidad | **KNeighborsRegressor (KNN)** con `StandardScaler` (Scikit-Learn) sobre `historico_ofertas` |
@@ -61,8 +61,9 @@ GOOGLE_TIMEZONE=America/Bogota
 OWNER_WHATSAPP_NUMBER=573001234567
 BOTPRESS_API_KEY=
 HUMAN_REACTIVATION_API_KEY=admin_sma_2026
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3-flash-preview
+OLLAMA_HOST=http://127.0.0.1:11434
+LLAMA_MODEL=auto
+LLAMA_AUTO_INSTALL=true
 HOST=0.0.0.0
 PORT=8000
 ```

@@ -1,7 +1,8 @@
 """
 Suite de pruebas automatizadas del SistemaMultiagenteComercial:
 1. Estructura organizacional MAS-ML (5 roles, control, 5 dependencias y reglas).
-2. Datasets (>= 30 registros) y modelos Scikit-Learn (NLP, RandomForest, KNN).
+2. Datasets (>= 30 registros), modelos Scikit-Learn especialistas (RandomForest, KNN)
+   y motor generativo local Meta Llama (Ollama) para AgenteVentas.
 3. Diagramas de secuencia FIPA-ACL (Escenario 1 alt/else, Escenario 2 alt/else,
    Agendamiento y Escalamiento Human-in-the-Loop).
 4. Integracion API oficial para Botpress (WhatsApp, Webchat, Messenger, Instagram),
@@ -34,13 +35,12 @@ from src.integracion_botpress.servidor_botpress import (
     crear_app_botpress,
 )
 from src.ml.datasets import generar_historico_ofertas, generar_tarifas_historicas
-from src.ml.generador_llm import GeneradorDialogoGemini
 from src.ml.modelos_ml import (
     ModeloCotizacionesRF,
-    ModeloNLPVentas,
     ModeloPromocionesKNN,
     _extraer_fecha_hora,
 )
+from src.ml.motor_llama import MotorLlamaVentas, resolver_modelo_llama
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 from src.persistencia.google_calendar import ClienteGoogleCalendar, ErrorGoogleCalendar
 from src.persistencia.repositorio import (
@@ -123,13 +123,13 @@ def test_estructura_masml_roles_control_y_dependencias() -> None:
 
 
 def test_modelos_sklearn_y_datasets() -> None:
-    """Valida datasets >=30 filas y metricas predictivas de los 3 modelos Scikit-Learn."""
+    """Valida datasets >=30 filas, RandomForest, KNN y MotorLlamaVentas."""
     df_tarifas = generar_tarifas_historicas()
     df_ofertas = generar_historico_ofertas()
     assert len(df_tarifas) >= 30
     assert len(df_ofertas) >= 30
 
-    modelo_nlp = ModeloNLPVentas()
+    motor_ventas = MotorLlamaVentas(habilitado=False)
     modelo_rf = ModeloCotizacionesRF(df_tarifas)
     modelo_knn = ModeloPromocionesKNN(df_ofertas)
 
@@ -155,25 +155,25 @@ def test_modelos_sklearn_y_datasets() -> None:
     )
     assert 0.0 < pred_promo["descuento_porciento"] <= 20.0
 
-    nlp_cot = modelo_nlp.analizar_mensaje(
+    nlp_cot = motor_ventas.analizar_mensaje(
         "Necesito cotizar desarrollo web de 45 horas con complejidad 3"
     )
     assert nlp_cot["intencion"] == "solicitud_cotizacion"
     assert nlp_cot["parametros_extraidos"]["horas_estimadas"] == 45
     assert nlp_cot["parametros_extraidos"]["complejidad"] == 3
 
-    nlp_obj = modelo_nlp.analizar_mensaje("Me parece costoso para mi presupuesto")
+    nlp_obj = motor_ventas.analizar_mensaje("Me parece costoso para mi presupuesto")
     assert nlp_obj["intencion"] == "objecion_precio"
     assert nlp_obj["tono_cliente"] == "indeciso"
 
-    nlp_hostil = modelo_nlp.analizar_mensaje("Esto es una estafa, quiero un humano ya")
+    nlp_hostil = motor_ventas.analizar_mensaje("Esto es una estafa, quiero un humano ya")
     assert nlp_hostil["tono_cliente"] == "hostil"
 
-    nlp_coloquial = modelo_nlp.analizar_mensaje("oye compadre que vendes")
+    nlp_coloquial = motor_ventas.analizar_mensaje("oye compadre que vendes")
     assert nlp_coloquial["intencion"] == "consulta_servicio"
     assert nlp_coloquial["tono_cliente"] == "interesado"
 
-    nlp_rechazo = modelo_nlp.analizar_mensaje("No voy a comprar, gracias, excede mi presupuesto")
+    nlp_rechazo = motor_ventas.analizar_mensaje("No voy a comprar, gracias, excede mi presupuesto")
     assert nlp_rechazo["intencion"] == "rechazo_compra"
     assert nlp_rechazo["tono_cliente"] == "indeciso"
 
@@ -187,10 +187,11 @@ def test_extrae_cantidades_y_complejidad_en_espanol_segun_unidad() -> None:
             "requiere_complejidad": True,
         }
     }
-    modelo_sesiones = ModeloNLPVentas(
+    modelo_sesiones = MotorLlamaVentas(
         catalogo_servicios=catalogo,
         unidad_cantidad="sesiones",
         etiqueta_cantidad="sesiones_requeridas",
+        habilitado=False,
     )
     for texto, esperado in (
         ("Una sesión", 1),
@@ -203,28 +204,28 @@ def test_extrae_cantidades_y_complejidad_en_espanol_segun_unidad() -> None:
         ("Tres sesiones", 3),
         ("3 sesiones", 3),
     ):
-        parametros = modelo_sesiones._extraer_parametros_texto(texto)
+        parametros = modelo_sesiones._extraer_parametros_determinista(texto)
         assert parametros["cantidad_unidades"] == esperado, texto
         assert parametros["sesiones_requeridas"] == esperado
         assert "horas_estimadas" not in parametros
 
-    modelo_horas = ModeloNLPVentas(unidad_cantidad="horas")
-    assert modelo_horas._extraer_parametros_texto("Una hora")["horas_estimadas"] == 1
-    assert modelo_horas._extraer_parametros_texto("2 horas")["horas_estimadas"] == 2
-    modelo_unidades = ModeloNLPVentas(unidad_cantidad="unidades")
+    modelo_horas = MotorLlamaVentas(unidad_cantidad="horas", habilitado=False)
+    assert modelo_horas._extraer_parametros_determinista("Una hora")["horas_estimadas"] == 1
+    assert modelo_horas._extraer_parametros_determinista("2 horas")["horas_estimadas"] == 2
+    modelo_unidades = MotorLlamaVentas(unidad_cantidad="unidades", habilitado=False)
     assert (
-        modelo_unidades._extraer_parametros_texto("5 unidades")["cantidad_unidades"]
+        modelo_unidades._extraer_parametros_determinista("5 unidades")["cantidad_unidades"]
         == 5
     )
-    modelo_fotografias = ModeloNLPVentas(unidad_cantidad="fotografías")
+    modelo_fotografias = MotorLlamaVentas(unidad_cantidad="fotografías", habilitado=False)
     assert (
-        modelo_fotografias._extraer_parametros_texto("10 fotografías")[
+        modelo_fotografias._extraer_parametros_determinista("10 fotografías")[
             "cantidad_unidades"
         ]
         == 10
     )
-    assert not modelo_sesiones._extraer_parametros_texto("Necesito una sola")
-    assert not modelo_sesiones._extraer_parametros_texto("Necesito cinco horas")
+    assert not modelo_sesiones._extraer_parametros_determinista("Necesito una sola")
+    assert not modelo_sesiones._extraer_parametros_determinista("Necesito cinco horas")
 
     for texto, esperado in (
         ("Complejidad 1", 1),
@@ -235,21 +236,22 @@ def test_extrae_cantidades_y_complejidad_en_espanol_segun_unidad() -> None:
         ("Nivel tres", 3),
     ):
         assert (
-            modelo_sesiones._extraer_parametros_texto(texto)["complejidad"]
+            modelo_sesiones._extraer_parametros_determinista(texto)["complejidad"]
             == esperado
         )
-    assert "complejidad" not in modelo_sesiones._extraer_parametros_texto(
+    assert "complejidad" not in modelo_sesiones._extraer_parametros_determinista(
         "Complejidad 6"
     )
-    assert "complejidad" not in modelo_sesiones._extraer_parametros_texto(
+    assert "complejidad" not in modelo_sesiones._extraer_parametros_determinista(
         "Complejidad media"
     )
-    modelo_equivalencias = ModeloNLPVentas(
+    modelo_equivalencias = MotorLlamaVentas(
         unidad_cantidad="sesiones",
         equivalencias_complejidad={"media": 3},
+        habilitado=False,
     )
     assert (
-        modelo_equivalencias._extraer_parametros_texto("Complejidad media")[
+        modelo_equivalencias._extraer_parametros_determinista("Complejidad media")[
             "complejidad"
         ]
         == 3
@@ -267,12 +269,13 @@ def test_contexto_de_cotizacion_interpreta_respuesta_corta_y_productos_separados
             "requiere_complejidad": True,
         }
     }
-    modelo = ModeloNLPVentas(
+    modelo = MotorLlamaVentas(
         catalogo_servicios=catalogo,
         unidad_cantidad="sesiones",
         etiqueta_cantidad="sesiones_requeridas",
+        habilitado=False,
     )
-    parametros = modelo._extraer_parametros_texto(
+    parametros = modelo._extraer_parametros_determinista(
         "Necesito una sola sesión y son 10 productos"
     )
     assert parametros["sesiones_requeridas"] == 1
@@ -290,8 +293,6 @@ def test_contexto_de_cotizacion_interpreta_respuesta_corta_y_productos_separados
     assert analisis["intencion"] == "solicitud_cotizacion"
     assert analisis["parametros_extraidos"]["complejidad"] == 1
     assert not analisis["escalamiento_humano"]
-    assert analisis["probabilidad_modelo"] == analisis["confianza"]
-    assert analisis["probabilidad_modelo"] < 0.78
 
     reclamo = modelo.analizar_mensaje("Esto es una estafa, quiero un humano")
     assert reclamo["escalamiento_humano"]
@@ -369,13 +370,15 @@ def test_identidad_botpress_no_inventa_fallback_y_separa_clientes() -> None:
 
 def test_preguntas_de_catalogo_no_se_clasifican_como_cotizacion() -> None:
     repo = RepositorioSQLite(":memory:")
-    modelo_general = ModeloNLPVentas(
-        catalogo_servicios=repo.obtener_catalogo_servicios()
+    modelo_general = MotorLlamaVentas(
+        catalogo_servicios=repo.obtener_catalogo_servicios(),
+        habilitado=False,
     )
     for texto in (
         "Hola, ¿qué servicios ofrecen?",
         "Quiero conocer sus servicios",
         "¿Qué tipos de servicios tienen?",
+        "su catalogo de servicio por favor",
     ):
         analisis = modelo_general.analizar_mensaje(texto)
         assert analisis["intencion"] == "consulta_servicio", texto
@@ -389,10 +392,11 @@ def test_preguntas_de_catalogo_no_se_clasifican_como_cotizacion() -> None:
             "requiere_complejidad": True,
         }
     }
-    modelo_fotografia = ModeloNLPVentas(
+    modelo_fotografia = MotorLlamaVentas(
         catalogo_servicios=catalogo_fotografia,
         unidad_cantidad="sesiones",
         etiqueta_cantidad="sesiones_requeridas",
+        habilitado=False,
     )
     for texto in (
         "Me interesa fotografía de producto",
@@ -463,7 +467,7 @@ def test_fechas_horas_y_anios_explicitos_en_bogota() -> None:
 
 
 def test_respuesta_corta_de_horario_no_es_objecion_de_precio() -> None:
-    analisis = ModeloNLPVentas().analizar_mensaje(
+    analisis = MotorLlamaVentas(habilitado=False).analizar_mensaje(
         "a las 9 está bien",
         contexto_tipo="solicitud_agendamiento",
         parametros_acumulados={"fecha_agendamiento_fecha": "2027-01-02"},
@@ -473,7 +477,7 @@ def test_respuesta_corta_de_horario_no_es_objecion_de_precio() -> None:
     assert analisis["parametros_extraidos"]["fecha_hora"] == "2027-01-02 09:00"
     assert "descuento_solicitado_cliente" not in analisis["parametros_extraidos"]
 
-    cambio_fecha = ModeloNLPVentas().analizar_mensaje(
+    cambio_fecha = MotorLlamaVentas(habilitado=False).analizar_mensaje(
         "el 3 de enero",
         contexto_tipo="solicitud_agendamiento",
         parametros_acumulados={
@@ -484,7 +488,7 @@ def test_respuesta_corta_de_horario_no_es_objecion_de_precio() -> None:
 
 
 def test_identificadores_y_respuestas_numericas_no_son_objeciones_de_precio() -> None:
-    modelo = ModeloNLPVentas()
+    modelo = MotorLlamaVentas(habilitado=False)
     for texto in ("1143414217", "573001112233", "280000", "30", "2"):
         analisis = modelo.analizar_mensaje(texto)
         assert analisis["intencion"] != "objecion_precio", texto
@@ -496,7 +500,7 @@ def test_identificadores_y_respuestas_numericas_no_son_objeciones_de_precio() ->
 
 
 def test_fecha_sin_hora_se_conserva_como_parcial() -> None:
-    analisis = ModeloNLPVentas().analizar_mensaje(
+    analisis = MotorLlamaVentas(habilitado=False).analizar_mensaje(
         "Quiero agendar cita para mañana",
         contexto_tipo="solicitud_agendamiento",
     )
@@ -546,7 +550,7 @@ def test_fechas_imposibles_y_pasadas_no_se_aceptan() -> None:
     ayer = (datetime.now(ZoneInfo("America/Bogota")) - timedelta(days=1)).strftime(
         "%Y-%m-%d"
     )
-    analisis = ModeloNLPVentas().analizar_mensaje(
+    analisis = MotorLlamaVentas(habilitado=False).analizar_mensaje(
         f"Quiero agendar cita para {ayer} 09:00"
     )
     assert analisis["parametros_extraidos"]["fecha_hora_pasada"] is True
@@ -3275,131 +3279,137 @@ def test_coordinador_rechaza_descuento_que_compromete_margen_minimo() -> None:
     asyncio.run(_run())
 
 
-def test_generador_gemini_redacta_valida_hechos_y_hace_fallback_en_429() -> None:
+def test_motor_llama_local_nlu_nlg_valida_hechos_y_hace_fallback() -> None:
     """
-    Valida la arquitectura dual Scikit-Learn (NLU) + Gemini (NLG):
-    1) Redacta respuesta humana conservando el valor exacto del RandomForest.
-    2) Rechaza salida alucinada si Gemini altera el precio y cae al texto verificado.
-    3) Activa circuit breaker ante HTTP 429 (cuota agotada) evitando bloquear futuras llamadas.
+    Valida la arquitectura de AgenteVentas impulsada por Meta Llama local (Ollama):
+    1) Ejecuta NLU con Structured Outputs (JSON Schema) y redacta respuesta natural
+       conservando exactamente el monto calculado por RandomForestRegressor.
+    2) Rechaza salida alucinada si el modelo altera el monto y cae al borrador verificado.
+    3) Activa circuit breaker ante caida de conexion con Ollama sin bloquear el flujo.
     """
-    llamadas_http: List[str] = []
+    import json as _json
+    import re as _re
+
+    llamadas_ollama: List[str] = []
     modo_mock = {"caso": "ok"}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        llamadas_http.append(str(request.url))
-        assert request.headers.get("x-goog-api-key") == "clave_gemini_demo"
-        if modo_mock["caso"] == "429":
-            return httpx.Response(429, json={"error": {"message": "Quota exceeded"}})
-        if modo_mock["caso"] == "alucinacion":
-            return httpx.Response(
-                200,
-                json={
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {
-                                        "text": "Claro que si, tu desarrollo web cuesta solo $500,000 COP."
-                                    }
-                                ]
-                            }
-                        }
-                    ]
-                },
-            )
-        body = request.read().decode("utf-8")
-        # Extrae el monto exacto enviado en el prompt para redactar una respuesta natural valida
-        import re as _re
+    class _RespuestaFalsa:
+        def __init__(self, contenido: str) -> None:
+            self.message = type("Msg", (), {"content": contenido})()
 
-        montos = _re.findall(r"\$[\d,]+", body)
-        monto_real = montos[0] if montos else "$0"
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "content": {
-                            "parts": [
-                                {
-                                    "text": (
-                                        "Con mucho gusto revise los detalles de tu proyecto de "
-                                        "Desarrollo Web Corporativo / Landing & Portal. "
-                                        f"La inversion estimada queda en {monto_real} COP. "
-                                        "Si te parece bien, podemos agendar una reunion para arrancar."
-                                    )
-                                }
-                            ]
+    class _ClienteOllamaFalso:
+        def chat(self, model, messages, format=None, options=None, keep_alive=None):
+            tipo = "nlu" if format is not None else "nlg"
+            llamadas_ollama.append(tipo)
+            if modo_mock["caso"] == "caida":
+                raise ConnectionError("Ollama no responde en 127.0.0.1:11434")
+            if tipo == "nlu":
+                return _RespuestaFalsa(
+                    _json.dumps(
+                        {
+                            "intencion": "solicitud_cotizacion",
+                            "es_saludo_simple": False,
+                            "es_pregunta_catalogo": False,
+                            "cotizacion_explicita": True,
+                            "tono_cliente": "interesado",
+                            "nivel_indecision": 0.2,
+                            "escalamiento_humano": False,
+                            "tipo_servicio": "desarrollo_web",
+                            "cantidad_unidades": 40,
+                            "complejidad": 3,
+                            "urgencia_dias": None,
+                            "incluye_adicional": False,
+                            "descuento_solicitado_cliente": None,
+                            "es_personalizado": False,
+                            "descripcion_personalizada": None,
+                            "cantidad_fotos": None,
+                            "cantidad_personas": None,
+                            "en_exterior": None,
+                            "fuera_de_alcance": False,
+                            "fecha_hora_texto": None,
                         }
-                    }
-                ]
-            },
-        )
+                    )
+                )
+            if modo_mock["caso"] == "alucinacion":
+                return _RespuestaFalsa(
+                    "Claro que si, tu desarrollo web cuesta solo $500,000 COP."
+                )
+            prompt_txt = messages[-1]["content"]
+            montos = _re.findall(r"\$[\d,]+", prompt_txt)
+            monto_real = montos[0] if montos else "$0"
+            return _RespuestaFalsa(
+                "Con mucho gusto revise los detalles de tu proyecto de "
+                "Desarrollo Web Corporativo / Landing & Portal. "
+                f"La inversion estimada queda en {monto_real} COP. "
+                "Si te parece bien, podemos agendar una reunion para arrancar."
+            )
 
     tiempo_simulado = {"t": 100.0}
-    generador = GeneradorDialogoGemini(
-        api_key="clave_gemini_demo",
-        modelo="gemini-2.5-flash",
-        timeout_segundos=2.0,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    motor_llama = MotorLlamaVentas(
+        modelo="llama3.1:8b",
+        cliente_ollama=_ClienteOllamaFalso(),
+        habilitado=True,
         reloj=lambda: tiempo_simulado["t"],
     )
+
+    assert resolver_modelo_llama("llama3.1:8b") == "llama3.1:8b"
 
     async def _run() -> None:
         servicio = ServicioMultiagenteComercial(
             config_botpress=ConfiguracionBotpress(),
-            generador_llm=generador,
+            motor_llama=motor_llama,
             usar_xmpp_embebido=False,
             silencioso=True,
         )
         await servicio.iniciar()
         try:
-            # 1) Redaccion natural exitosa conservando el valor del Random Forest
+            # 1) NLU estructurado (1 sola llamada) + NLG natural conservando valor RF
             res_ok = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
-                id_cliente="cli_gem_1",
+                id_cliente="cli_llama_1",
                 nombre_cliente="Mateo Silva",
                 texto="Quiero cotizar un desarrollo web de 40 horas complejidad 3",
             )
             assert res_ok["accion"] == "cotizacion_entregada"
             assert "Con mucho gusto revise los detalles" in res_ok["respuesta"]
             assert f"${res_ok['resultado']['valor_total']:,.0f}" in res_ok["respuesta"]
-            assert generador.llamadas_exitosas == 1
-            assert len(llamadas_http) == 1
+            assert motor_llama.llamadas_nlu_exitosas == 1
+            assert motor_llama.llamadas_nlg_exitosas == 1
+            assert llamadas_ollama == ["nlu", "nlg"]
 
-            # 2) Anti-alucinacion: si Gemini cambia el monto, cae al borrador verificado
+            # 2) Anti-alucinacion: si Llama altera el monto, cae al borrador verificado
             modo_mock["caso"] = "alucinacion"
             res_guard = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
-                id_cliente="cli_gem_2",
+                id_cliente="cli_llama_2",
                 nombre_cliente="Lucia Vega",
                 texto="Quiero cotizar un desarrollo web de 40 horas complejidad 3",
             )
             assert "$500,000" not in res_guard["respuesta"]
             assert f"${res_guard['resultado']['valor_total']:,.0f}" in res_guard["respuesta"]
-            assert generador.fallbacks_activados == 1
+            assert motor_llama.fallbacks_activados == 1
 
-            # 3) HTTP 429 (tokens agotados): activa circuit breaker y no vuelve a llamar HTTP
-            modo_mock["caso"] = "429"
-            res_429 = await servicio.procesar_mensaje_entrante(
+            # 3) Caida de conexion Ollama: activa circuit breaker y cae al respaldo sin bloquear
+            modo_mock["caso"] = "caida"
+            res_err = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
-                id_cliente="cli_gem_3",
+                id_cliente="cli_llama_3",
                 nombre_cliente="Paula Ortiz",
                 texto="Hola, que servicios ofrecen?",
             )
-            assert res_429["accion"] == "catalogo_enviado"
-            assert "complejidad 1-5" not in res_429["respuesta"].lower()
-            assert generador.en_enfriamiento is True
-            llamadas_tras_429 = len(llamadas_http)
+            assert res_err["accion"] == "catalogo_enviado"
+            assert motor_llama.en_enfriamiento is True
+            llamadas_tras_caida = len(llamadas_ollama)
 
-            # Siguiente mensaje en enfriamiento responde al instante sin llamada HTTP
+            # Siguiente mensaje en enfriamiento responde al instante sin volver a golpear Ollama
             res_enfriado = await servicio.procesar_mensaje_entrante(
                 canal="WhatsApp",
-                id_cliente="cli_gem_4",
+                id_cliente="cli_llama_4",
                 nombre_cliente="Oscar Leon",
                 texto="Oye compadre que vendes",
             )
             assert res_enfriado["accion"] == "catalogo_enviado"
-            assert len(llamadas_http) == llamadas_tras_429
+            assert len(llamadas_ollama) == llamadas_tras_caida
         finally:
             await servicio.detener()
 
@@ -3549,25 +3559,13 @@ def test_cotizacion_fotografia_a_medida_fraccionada_sin_perdida() -> None:
     asyncio.run(_run())
 
 
-def test_bateria_exhaustiva_escenarios_nlp_y_reglas() -> None:
+def test_bateria_exhaustiva_escenarios_ventas_y_reglas() -> None:
     """
     Bateria exhaustiva de 50+ escenarios reales (coloquial colombiano, typos,
     fotografia estandar/a medida/fraccionada, software, objeciones de precio,
     fechas naturales, rechazos corteses, escalamiento humano y fuera de alcance)
-    junto con validacion cruzada del clasificador TF-IDF + LogisticRegression.
+    sobre el respaldo determinista sin ML de MotorLlamaVentas.
     """
-    from sklearn.model_selection import StratifiedKFold, cross_val_score
-    from src.ml.datasets import CORPUS_NLP_VENTAS
-
-    # 1) Validacion cruzada del modelo puro Scikit-Learn (sin reglas)
-    modelo_tech = ModeloNLPVentas(unidad_cantidad="horas")
-    textos = [fila[0] for fila in CORPUS_NLP_VENTAS]
-    etiquetas = [fila[1] for fila in CORPUS_NLP_VENTAS]
-    assert len(CORPUS_NLP_VENTAS) >= 150
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    scores = cross_val_score(modelo_tech.modelo_intencion, textos, etiquetas, cv=cv)
-    assert float(scores.mean()) >= 0.80, f"Accuracy CV insuficiente: {scores.mean():.3f}"
-
     catalogo_foto = {
         "sesion_producto": {
             "id": 1,
@@ -3598,10 +3596,11 @@ def test_bateria_exhaustiva_escenarios_nlp_y_reglas() -> None:
             "requiere_complejidad": True,
         },
     }
-    modelo_foto = ModeloNLPVentas(
+    modelo_foto = MotorLlamaVentas(
         catalogo_servicios=catalogo_foto,
         unidad_cantidad="sesiones",
         etiqueta_cantidad="sesiones_requeridas",
+        habilitado=False,
     )
 
     casos_foto = [

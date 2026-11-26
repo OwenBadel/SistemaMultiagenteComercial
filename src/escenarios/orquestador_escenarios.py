@@ -2,7 +2,8 @@
 Servicio principal del SistemaMultiagenteComercial.
 Ensambla el entorno EntornoVirtualAtencion conectado a Botpress (WhatsApp,
 Webchat, Messenger e Instagram), la organizacion MAS-ML SistemaMultiagenteComercial,
-los modelos de Scikit-Learn y los 5 agentes SPADE sobre XMPP embebido.
+el motor generativo local Meta Llama (Ollama) para Ventas, los modelos numericos
+de Scikit-Learn (RandomForest y KNN) y los 5 agentes SPADE sobre XMPP embebido.
 """
 from __future__ import annotations
 
@@ -22,12 +23,11 @@ from src.comunicacion.monitor_fipa import MonitorFIPAACL
 from src.comunicacion.spade_runtime import detener_agentes_spade, iniciar_agentes_spade
 from src.entorno.entorno_virtual import EntornoVirtualAtencion
 from src.integracion_botpress.configuracion import ConfiguracionBotpress
-from src.ml.generador_llm import GeneradorDialogoGemini
 from src.ml.modelos_ml import (
     ModeloCotizacionesRF,
-    ModeloNLPVentas,
     ModeloPromocionesKNN,
 )
+from src.ml.motor_llama import MotorLlamaVentas
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
 from src.persistencia.google_calendar import ClienteGoogleCalendar
 from src.persistencia.repositorio import RepositorioEntorno, crear_repositorio
@@ -62,7 +62,8 @@ class ServicioMultiagenteComercial:
         config_botpress: Optional[ConfiguracionBotpress] = None,
         repositorio: Optional[RepositorioEntorno] = None,
         google_calendar: Optional[ClienteGoogleCalendar] = None,
-        generador_llm: Optional[GeneradorDialogoGemini] = None,
+        motor_llama: Optional[MotorLlamaVentas] = None,
+        usar_llama_local: Optional[bool] = None,
         usar_xmpp_embebido: bool = True,
         consola: Optional[Console] = None,
         silencioso: bool = False,
@@ -116,7 +117,7 @@ class ServicioMultiagenteComercial:
         self.df_tarifas = self.entorno.tarifasYMargenes.tarifas_historicas
         self.df_ofertas = self.entorno.tarifasYMargenes.historico_ofertas
 
-        # 4. Entrenamiento dinamico de modelos Scikit-Learn con los datos del negocio
+        # 4. Motor generativo local Meta Llama (Ventas) y modelos ML numericos (RF y KNN)
         catalogo = self.entorno.plataformas.portafolio_servicios
         unidad = str(self.entorno.config_negocio.get("unidad_cantidad", "horas"))
         etiqueta_cantidad = str(
@@ -125,18 +126,32 @@ class ServicioMultiagenteComercial:
         etiqueta_complejidad = str(
             self.entorno.config_negocio.get("etiqueta_complejidad", "complejidad")
         )
-        self.modelo_nlp = ModeloNLPVentas(
-            catalogo_servicios=catalogo,
-            unidad_cantidad=unidad,
-            etiqueta_cantidad=etiqueta_cantidad,
-            etiqueta_complejidad=etiqueta_complejidad,
-            equivalencias_complejidad=self.entorno.config_negocio.get(
-                "equivalencias_complejidad"
-            ),
-            rango_complejidad=(
-                self.entorno.config_negocio.get("complejidad_minima", 1),
-                self.entorno.config_negocio.get("complejidad_maxima", 5),
-            ),
+        llama_habilitado = (
+            bool(usar_llama_local)
+            if usar_llama_local is not None
+            else (not self.silencioso)
+        )
+        self.motor_llama = (
+            motor_llama
+            if motor_llama is not None
+            else MotorLlamaVentas(
+                catalogo_servicios=catalogo,
+                unidad_cantidad=unidad,
+                etiqueta_cantidad=etiqueta_cantidad,
+                etiqueta_complejidad=etiqueta_complejidad,
+                equivalencias_complejidad=self.entorno.config_negocio.get(
+                    "equivalencias_complejidad"
+                ),
+                rango_complejidad=(
+                    self.entorno.config_negocio.get("complejidad_minima", 1),
+                    self.entorno.config_negocio.get("complejidad_maxima", 5),
+                ),
+                contexto_negocio=self.entorno.config_negocio,
+                modelo=self.config_botpress.llama_model,
+                host=self.config_botpress.ollama_host,
+                timeout_segundos=self.config_botpress.llama_timeout_seconds,
+                habilitado=llama_habilitado,
+            )
         )
         self.modelo_rf = ModeloCotizacionesRF(
             self.df_tarifas,
@@ -144,15 +159,6 @@ class ServicioMultiagenteComercial:
             unidad_cantidad=unidad,
         )
         self.modelo_knn = ModeloPromocionesKNN(self.df_ofertas)
-        self.generador_llm = (
-            generador_llm
-            if generador_llm is not None
-            else GeneradorDialogoGemini(
-                api_key=self.config_botpress.gemini_api_key,
-                modelo=self.config_botpress.gemini_model,
-                timeout_segundos=self.config_botpress.gemini_timeout_seconds,
-            )
-        )
 
         # 5. Organizacion MAS-ML
         self.organizacion = SistemaMultiagenteComercial(entorno=self.entorno)
@@ -165,8 +171,7 @@ class ServicioMultiagenteComercial:
             entorno=self.entorno,
             organizacion=self.organizacion,
             monitor=self.monitor,
-            modelo_nlp=self.modelo_nlp,
-            generador_llm=self.generador_llm,
+            motor_llama=self.motor_llama,
         )
         self.cotizaciones = AgenteCotizaciones(
             entorno=self.entorno,
@@ -215,7 +220,7 @@ class ServicioMultiagenteComercial:
         payload: Dict[str, Any],
         conversation_id: str,
         esperar_coordinador: bool = False,
-        timeout: float = 12.0,
+        timeout: float = 60.0,
     ) -> Dict[str, Any]:
         """Dispara un eventoLlegadaMensaje y espera el termino del ciclo FIPA-ACL."""
         async with self._lock_flujo:
@@ -300,10 +305,21 @@ class ServicioMultiagenteComercial:
             else []
         )
         if esperando_parametros and not campos_pendientes:
-            campos_pendientes = self.modelo_nlp.campos_cotizacion_pendientes(
+            campos_pendientes = self.motor_llama.campos_cotizacion_pendientes(
                 parametros_acumulados
             )
         estado_reserva = contexto_conversacion.get("estado_reserva", {})
+        cotizacion_actual = (
+            contexto_conversacion.get("ultima_cotizacion")
+            if conversation_id
+            else perfil_previo.get("ultima_cotizacion")
+        )
+        tiene_cotizacion_actual = self.entorno.perfilesClientes.tiene_cotizacion(
+            id_cliente, conversation_id
+        )
+        cotizacion_aprobada_actual = self.entorno.perfilesClientes.cotizacion_aprobada(
+            id_cliente, conversation_id
+        )
         contexto_nlp = tipo_evento_sugerido
         if (
             not tipo_evento_sugerido
@@ -320,11 +336,6 @@ class ServicioMultiagenteComercial:
         ):
             contexto_nlp = "solicitud_agendamiento"
         else:
-            cotizacion_actual = (
-                contexto_conversacion.get("ultima_cotizacion")
-                if conversation_id
-                else perfil_previo.get("ultima_cotizacion")
-            )
             texto_cf = texto.casefold()
             es_pregunta_o_ajuste = (
                 "?" in texto_cf
@@ -345,17 +356,22 @@ class ServicioMultiagenteComercial:
             )
             if (
                 cotizacion_actual is not None
-                and not self.entorno.perfilesClientes.cotizacion_aprobada(
-                    id_cliente, conversation_id
-                )
+                and not cotizacion_aprobada_actual
                 and texto_afirmativo
             ):
                 contexto_nlp = "aceptar_cotizacion"
-        analisis_previo = self.modelo_nlp.analizar_mensaje(
+        analisis_previo = self.motor_llama.analizar_mensaje(
             texto,
             contexto_tipo=contexto_nlp,
             campos_pendientes=campos_pendientes,
             parametros_acumulados=parametros_acumulados,
+            historial_reciente=perfil_previo.get("historial_interacciones", [])[-6:],
+            estado_conversacion={
+                "tiene_cotizacion": tiene_cotizacion_actual,
+                "ultima_cotizacion": cotizacion_actual,
+                "cotizacion_aprobada": cotizacion_aprobada_actual,
+                "paso_reserva": estado_reserva.get("paso") if isinstance(estado_reserva, dict) else None,
+            },
         )
         tipo_evento = tipo_evento_sugerido or analisis_previo["intencion"]
         if contexto_nlp == "aceptar_cotizacion" and analisis_previo["intencion"] != "rechazo_compra":
@@ -380,15 +396,19 @@ class ServicioMultiagenteComercial:
             campos_pendientes
             and analisis_previo.get("parametros_extraidos")
             and not analisis_previo.get("escalamiento_humano")
-            and analisis_previo["intencion"] == "solicitud_cotizacion"
+            and not analisis_previo.get("es_pregunta_catalogo")
+            and not analisis_previo.get("es_saludo_simple")
+            and analisis_previo["intencion"] in {"solicitud_cotizacion", "parametros_servicio"}
         ):
             tipo_evento = "parametros_servicio"
         elif (
             esperando_parametros
             and analisis_previo["intencion"] in {"consulta_servicio", "solicitud_cotizacion"}
             and not analisis_previo.get("escalamiento_humano")
+            and not analisis_previo.get("es_pregunta_catalogo")
+            and not analisis_previo.get("es_saludo_simple")
             and not tipo_evento_sugerido
-            and not re.match(r"^(?:hola|buenos?\s+d[ií]as?|buenas?\s+(?:tardes|noches)|hey)\W*$", texto.strip().casefold())
+            and not re.match(r"^(?:hola|buenos?\s+d[ií]as?|buenas?(?:\s+(?:tardes|noches))?|hey)\W*$", texto.strip().casefold())
             and "catalogo" not in texto.casefold()
             and "catálogo" not in texto.casefold()
             and "portafolio" not in texto.casefold()
@@ -411,6 +431,7 @@ class ServicioMultiagenteComercial:
                 "canal": canal,
                 "texto": texto,
                 "contexto_conversacion_id": conversation_id,
+                "analisis_llama_turno": analisis_previo,
             }
         )
         conv_id = f"bp-{canal.lower()}-{id_cliente}-{len(self.entorno.eventos_disparados) + 1}"

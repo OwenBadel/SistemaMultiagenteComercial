@@ -1,6 +1,6 @@
 """
 Configuracion del puente API entre Botpress, Supabase PostgreSQL,
-Google Calendar API v3 y SistemaMultiagenteComercial.
+Google Calendar API v3, Ollama (Meta Llama local) y SistemaMultiagenteComercial.
 """
 from __future__ import annotations
 
@@ -11,9 +11,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+def _leer_bool_env(nombre: str, default: bool = True) -> bool:
+    valor = os.getenv(nombre)
+    if valor is None:
+        return default
+    return valor.strip().lower() not in {"0", "false", "no", "off"}
+
+
 @dataclass
 class ConfiguracionBotpress:
-    """Parametros del servidor HTTP conectado con Botpress, Supabase y Google Calendar."""
+    """Parametros del servidor HTTP conectado con Botpress, Supabase, Google Calendar y Ollama."""
 
     botpress_api_key: str = ""
     human_reactivation_api_key: str = ""
@@ -25,9 +32,10 @@ class ConfiguracionBotpress:
     google_calendar_id: str = ""
     google_service_account_json: str = ""
     google_timezone: str = "America/Bogota"
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-3-flash-preview"
-    gemini_timeout_seconds: float = 4.0
+    ollama_host: str = "http://127.0.0.1:11434"
+    llama_model: str = "auto"
+    llama_timeout_seconds: float = 30.0
+    llama_auto_install: bool = True
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -52,17 +60,13 @@ class ConfiguracionBotpress:
             google_calendar_id=os.getenv("GOOGLE_CALENDAR_ID", ""),
             google_service_account_json=os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", ""),
             google_timezone=os.getenv("GOOGLE_TIMEZONE", "America/Bogota"),
-            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-            gemini_timeout_seconds=float(os.getenv("GEMINI_TIMEOUT_SECONDS", "4.0")),
+            ollama_host=os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
+            llama_model=os.getenv("LLAMA_MODEL", "auto"),
+            llama_timeout_seconds=float(os.getenv("LLAMA_TIMEOUT_SECONDS", "30.0")),
+            llama_auto_install=_leer_bool_env("LLAMA_AUTO_INSTALL", True),
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8000")),
         )
-
-    @property
-    def usa_gemini(self) -> bool:
-        """Indica si hay una API key configurada para redaccion natural con Gemini."""
-        return bool(self.gemini_api_key.strip())
 
     @property
     def usa_supabase(self) -> bool:
@@ -78,7 +82,7 @@ class ConfiguracionBotpress:
 
     @property
     def google_calendar_configurado(self) -> bool:
-        """Indica que se intentó configurar Calendar, incluso con datos incompletos."""
+        """Indica que se intento configurar Calendar, incluso con datos incompletos."""
         return bool(
             self.google_calendar_id.strip()
             or self.google_service_account_json.strip()
