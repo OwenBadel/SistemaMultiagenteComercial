@@ -273,57 +273,86 @@ class AgenteVentas(AgenteBaseMASML):
         }
         return mapa.get(campo, campo.replace("_", " "))
 
+    @staticmethod
+    def _es_saludo_simple(texto: str) -> bool:
+        """Retorna True si el mensaje es solo un saludo sin pedir paquetes ni servicios."""
+        t = (texto or "").strip().casefold()
+        if not t:
+            return False
+        palabras_catalogo = (
+            "servicio", "paquete", "plan", "catalogo", "catálogo",
+            "portafolio", "ofrecen", "tienen", "hacen", "producto",
+            "lista", "opciones", "precio", "costo", "cuesta",
+        )
+        if any(p in t for p in palabras_catalogo):
+            return False
+        saludos = (
+            "hola", "buenos dias", "buenos días", "buenas tardes",
+            "buenas noches", "buenas", "hey", "que tal", "qué tal",
+            "saludos", "holi", "buen dia", "buen día",
+        )
+        return any(s in t for s in saludos) and len(t.split()) <= 6
+
     def enviarCatalogoVisual(self, canal: str, id_cliente: str) -> Dict[str, Any]:
-        """Envia el portafolio visual de servicios cargado dinamicamente desde BD."""
+        """Envia bienvenida de negocio o paquetes sin precios (los precios los da AgenteCotizaciones)."""
         cfg = self.entorno.config_negocio
         catalogo = self.entorno.plataformas.portafolio_servicios
-        intro = str(
-            cfg.get(
-                "mensaje_catalogo_intro",
-                "Con gusto te comparto nuestro portafolio de servicios",
-            )
-        )
+        nombre_negocio = str(cfg.get("nombre_negocio", "nuestro estudio"))
+        rubro = str(cfg.get("rubro", "servicios profesionales"))
         unidad = str(cfg.get("unidad_cantidad", "unidades"))
-        moneda = str(cfg.get("moneda", "COP"))
-        lineas = [
-            f"- {meta.get('nombre', clave)} (desde ${float(meta.get('tarifa_unitaria', meta.get('tarifa_hora_cop', 0))):,.0f} {moneda}/{unidad})"
+        lineas_sin_precio = [
+            f"- {meta.get('nombre', clave)}"
             for clave, meta in catalogo.items()
         ]
-        texto_base = (
-            f"Hola! {intro}:\n"
-            + "\n".join(lineas)
-            + f"\nCuéntame qué servicio te interesa y aproximadamente cuántas {unidad} estás planeando para prepararte una cotización."
-        )
         ultimo_msg = (
-            str(self.creencias["mensajesEntrantes"][-1]).casefold()
+            str(self.creencias["mensajesEntrantes"][-1])
             if self.creencias.get("mensajesEntrantes")
             else ""
         )
+        ultimo_msg_cf = ultimo_msg.casefold()
         ya_vio_catalogo = any(
             t.get("rol") == "agente_ventas"
             for t in self.creencias.get("historialCharla", [])
         )
         pide_algo_especifico_o_no_esta = any(
-            p in ultimo_msg
+            p in ultimo_msg_cf
             for p in ("no esta", "no está", "ninguno", "otra cosa", "familiar", "familia", "boda", "quince")
         )
-        if (
+
+        if self._es_saludo_simple(ultimo_msg) and not ya_vio_catalogo:
+            tipo_nlg = "saludo_bienvenida"
+            texto_base = (
+                f"¡Hola! Bienvenido a {nombre_negocio}, nos especializamos en {rubro}. "
+                "¿En qué podemos ayudarte hoy?"
+            )
+            texto_base_nlg = texto_base
+            hechos_catalogo = [nombre_negocio]
+        elif (
             self.generador_llm is not None
             and self.generador_llm.activo
             and (ya_vio_catalogo or pide_algo_especifico_o_no_esta)
         ):
             tipo_nlg = "seguimiento_consulta_especifica"
-            hechos_catalogo: list[str] = []
+            hechos_catalogo = []
+            texto_base = (
+                f"En {nombre_negocio} contamos con estos paquetes:\n"
+                + "\n".join(lineas_sin_precio)
+                + f"\nCuéntame cuál te interesa y cuántas {unidad} necesitas para prepararte una cotización."
+            )
             texto_base_nlg = (
-                f"Referencia del portafolio disponible ({unidad}, {moneda}):\n"
-                + "\n".join(lineas)
-                + "\nEl cliente ya vio el catalogo o pregunta por una necesidad puntual. "
-                "Responde directamente a lo que escribio con empatia, sin repetir mecanicamente toda la lista, "
-                "y sugiere como adaptar alguno de nuestros servicios (o pregunta detalles para cotizarlo)."
+                f"Referencia de paquetes de {nombre_negocio} (SIN dar precios, los precios solo los calcula cotizaciones):\n"
+                + "\n".join(lineas_sin_precio)
+                + "\nResponde directamente a la necesidad del cliente sin inventar precios ni repetir mecanicamente la lista, "
+                "y sugiere como adaptar alguno de nuestros paquetes o preguntale detalles para cotizarlo."
             )
         else:
             tipo_nlg = "catalogo_servicios"
-            hechos_catalogo = [unidad] + [
+            texto_base = (
+                f"Con gusto, en {nombre_negocio} contamos con los siguientes paquetes:\n"
+                + "\n".join(lineas_sin_precio)
+                + f"\nCuéntame cuál te interesa y cuántas {unidad} planeas para que nuestro sistema te prepare una cotización."
+            )
+            hechos_catalogo = [
                 str(meta.get("nombre", clave)) for clave, meta in catalogo.items()
             ]
             texto_base_nlg = texto_base
@@ -1229,7 +1258,8 @@ class AgenteVentas(AgenteBaseMASML):
                     f"${valor_total:,.0f} {moneda}: {cantidad} {cantidad_texto} × "
                     f"${tarifa_unitaria:,.0f} {moneda}. Complejidad registrada: "
                     f"{complejidad_texto}; no se aplica un recargo porque no hay una "
-                    "regla de precio por complejidad configurada."
+                    "regla de precio por complejidad configurada. "
+                    "¿Te gustaría agendar una cita para este servicio?"
                 )
             else:
                 costo_base = float(
@@ -1246,7 +1276,8 @@ class AgenteVentas(AgenteBaseMASML):
                 texto_cot = (
                     f"Tu cotizacion formal estimada para '{desglose.get('servicio', 'Servicio')}' "
                     f"es de ${valor_total:,.0f} {moneda} (Base: ${costo_base:,.0f} {moneda}, "
-                    f"Ajuste por alcance/urgencia: ${ajuste:,.0f} {moneda})."
+                    f"Ajuste por alcance/urgencia: ${ajuste:,.0f} {moneda}). "
+                    "¿Te gustaría agendar una cita para iniciar?"
                 )
             res = self.responderLenguajeNatural(
                 "cotizacion_formal",
