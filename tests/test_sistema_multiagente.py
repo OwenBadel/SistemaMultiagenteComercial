@@ -3545,3 +3545,138 @@ def test_cotizacion_fotografia_a_medida_fraccionada_sin_perdida() -> None:
             await servicio.detener()
 
     asyncio.run(_run())
+
+
+def test_bateria_exhaustiva_escenarios_nlp_y_reglas() -> None:
+    """
+    Bateria exhaustiva de 50+ escenarios reales (coloquial colombiano, typos,
+    fotografia estandar/a medida/fraccionada, software, objeciones de precio,
+    fechas naturales, rechazos corteses, escalamiento humano y fuera de alcance)
+    junto con validacion cruzada del clasificador TF-IDF + LogisticRegression.
+    """
+    from sklearn.model_selection import StratifiedKFold, cross_val_score
+    from src.ml.datasets import CORPUS_NLP_VENTAS
+
+    # 1) Validacion cruzada del modelo puro Scikit-Learn (sin reglas)
+    modelo_tech = ModeloNLPVentas(unidad_cantidad="horas")
+    textos = [fila[0] for fila in CORPUS_NLP_VENTAS]
+    etiquetas = [fila[1] for fila in CORPUS_NLP_VENTAS]
+    assert len(CORPUS_NLP_VENTAS) >= 150
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    scores = cross_val_score(modelo_tech.modelo_intencion, textos, etiquetas, cv=cv)
+    assert float(scores.mean()) >= 0.80, f"Accuracy CV insuficiente: {scores.mean():.3f}"
+
+    catalogo_foto = {
+        "sesion_producto": {
+            "id": 1,
+            "nombre": "Fotografia de Producto E-Commerce",
+            "tarifa_unitaria": 280_000.0,
+            "palabras_clave": ["producto", "catalogo", "ecommerce"],
+            "requiere_complejidad": True,
+        },
+        "retrato_corporativo": {
+            "id": 2,
+            "nombre": "Retrato Corporativo y Marca Personal",
+            "tarifa_unitaria": 320_000.0,
+            "palabras_clave": ["retrato", "corporativo", "perfil", "marca personal", "foto"],
+            "requiere_complejidad": False,
+        },
+        "cobertura_evento": {
+            "id": 3,
+            "nombre": "Cobertura Fotografica de Eventos",
+            "tarifa_unitaria": 450_000.0,
+            "palabras_clave": ["evento", "boda", "grado", "conferencia", "fiesta"],
+            "requiere_complejidad": True,
+        },
+        "video_reel": {
+            "id": 4,
+            "nombre": "Produccion de Video Reels / Comercial Corto",
+            "tarifa_unitaria": 390_000.0,
+            "palabras_clave": ["video", "reel", "reels", "comercial", "grabacion"],
+            "requiere_complejidad": True,
+        },
+    }
+    modelo_foto = ModeloNLPVentas(
+        catalogo_servicios=catalogo_foto,
+        unidad_cantidad="sesiones",
+        etiqueta_cantidad="sesiones_requeridas",
+    )
+
+    casos_foto = [
+        # Saludos y consultas
+        ("Hola", "consulta_servicio"),
+        ("Buenos días", "consulta_servicio"),
+        ("Buenas noches", "consulta_servicio"),
+        ("Me envías el catálogo por favor", "consulta_servicio"),
+        ("Qué paquetes tienen disponibles?", "consulta_servicio"),
+        ("Oye compadre qué vendes", "consulta_servicio"),
+        ("Q servicios manejan?", "consulta_servicio"),
+        # Cotizaciones estandar, a medida, fraccionadas y refinamientos
+        ("Quiero cotizar 3 sesiones de retrato corporativo", "solicitud_cotizacion"),
+        ("Vale, me puedes hacer una cotización?", "solicitud_cotizacion"),
+        ("Quiero una foto familiar, somos 4 personas", "solicitud_cotizacion"),
+        ("De fotografía de producto solo quiero 1 foto", "solicitud_cotizacion"),
+        ("Pero yo nada más necesito 3 fotos", "solicitud_cotizacion"),
+        ("Te cuento, sería una sesión, unas 7 fotos con mi esposa", "solicitud_cotizacion"),
+        ("pero sería en el centro donde es la boda", "solicitud_cotizacion"),
+        ("Y si es en exterior en la playa?", "solicitud_cotizacion"),
+        ("Necesito fotos de 15 años en una finca", "solicitud_cotizacion"),
+        ("Quiero presupuesto para fotos de comida de mi restaurante", "solicitud_cotizacion"),
+        ("Cuánto vale una sesión de pareja?", "solicitud_cotizacion"),
+        ("Solo necesito una foto para hoja de vida", "solicitud_cotizacion"),
+        ("Necesito 10 fotos de un apartamento para Airbnb", "solicitud_cotizacion"),
+        ("Quiero cotizar una sesión de fotos con mi mascota", "solicitud_cotizacion"),
+        # Objeciones de precio (coloquiales y formales)
+        ("Está muy caro para mi presupuesto", "objecion_precio"),
+        ("Uy está muy cariñoso ese precio", "objecion_precio"),
+        ("Me puedes hacer un descuentico?", "objecion_precio"),
+        ("No me alcanza la plata, hay rebaja?", "objecion_precio"),
+        ("Bájale un poquito al precio y cerramos", "objecion_precio"),
+        ("En otro estudio me cobran más barato", "objecion_precio"),
+        ("No tienes algo más económico?", "objecion_precio"),
+        ("Xq tan caro?", "objecion_precio"),
+        ("Dame un 10% de descuento", "objecion_precio"),
+        ("Necesito un 25% de descuento porque es demasiado", "objecion_precio"),
+        # Agendamiento y fechas naturales
+        ("Acepto la cotización, agendemos para el 30 a las 3pm", "solicitud_agendamiento"),
+        ("Listo, cerramos trato, separa el cupo", "solicitud_agendamiento"),
+        ("Quiero reservar cita para mañana al mediodía", "solicitud_agendamiento"),
+        ("Qué tal el sábado a las 10 de la mañana?", "solicitud_agendamiento"),
+        ("El 5 de diciembre a las 4pm me sirve para agendar", "solicitud_agendamiento"),
+        # Rechazo de compra (Alternativa C)
+        ("No voy a comprar, gracias", "rechazo_compra"),
+        ("Por ahora no gracias, mejor después", "rechazo_compra"),
+        ("Deja así, cancelo la cotización", "rechazo_compra"),
+        ("Declino la propuesta, no deseo continuar", "rechazo_compra"),
+        ("No me convence, paso por ahora", "rechazo_compra"),
+        # Escalamiento humano y reclamos criticos (Escenario 2)
+        ("Esto es una estafa, pésimo servicio", "reclamo_critico"),
+        ("Quiero hablar con un humano por favor", "reclamo_critico"),
+        ("Pásame con el dueño del negocio", "reclamo_critico"),
+        ("Prefiero hablar con una persona real", "reclamo_critico"),
+        ("Este bot no sirve, necesito atención humana", "reclamo_critico"),
+        ("Me robaron, exijo devolución inmediata", "reclamo_critico"),
+        ("Voy a poner una queja ante la superintendencia", "reclamo_critico"),
+    ]
+
+    errores = []
+    for texto, esperada in casos_foto:
+        res = modelo_foto.analizar_mensaje(texto)
+        if res["intencion"] != esperada:
+            errores.append(f"'{texto}' -> obtuvo '{res['intencion']}', esperaba '{esperada}'")
+    assert not errores, "Fallos de clasificacion:\n" + "\n".join(errores)
+
+    # Verificar extracciones clave
+    res_esposa = modelo_foto.analizar_mensaje("unas 7 fotos con mi esposa en el centro")
+    assert res_esposa["parametros_extraidos"]["cantidad_fotos"] == 7
+    assert res_esposa["parametros_extraidos"]["cantidad_personas"] == 2
+    assert res_esposa["parametros_extraidos"]["en_exterior"] is True
+
+    res_mediodia = modelo_foto.analizar_mensaje("Quiero agendar mañana al mediodía")
+    assert res_mediodia["parametros_extraidos"]["fecha_hora"].endswith("12:00")
+
+    res_quince = modelo_foto.analizar_mensaje("Necesito quince fotos de producto")
+    assert res_quince["parametros_extraidos"]["cantidad_fotos"] == 15
+
+    res_fuera = modelo_foto.analizar_mensaje("Hola, ustedes arreglan celulares o hacen plomería?")
+    assert res_fuera["parametros_extraidos"].get("fuera_de_alcance") is True

@@ -108,9 +108,9 @@ class PeticionMensajeBotpress(BaseModel):
             fuente_identidad = "conversationId"
             alcance_identidad = "conversacion"
         else:
-            id_final = f"botpress:{canal_namespace}:cliente_web"
-            fuente_identidad = "fallback_web"
-            alcance_identidad = "conversacion"
+            id_final = ""
+            fuente_identidad = ""
+            alcance_identidad = ""
 
         nombre_final = (
             self.nombre or self.userName or f"{canal_final} Cliente"

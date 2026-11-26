@@ -67,10 +67,27 @@ _NUMEROS_ES = {
     "cuatro": 4,
     "cinco": 5,
     "seis": 6,
+    "media docena": 6,
     "siete": 7,
     "ocho": 8,
     "nueve": 9,
     "diez": 10,
+    "once": 11,
+    "doce": 12,
+    "docena": 12,
+    "trece": 13,
+    "catorce": 14,
+    "quince": 15,
+    "dieciseis": 16,
+    "diecisiete": 17,
+    "dieciocho": 18,
+    "diecinueve": 19,
+    "veinte": 20,
+    "veinticinco": 25,
+    "treinta": 30,
+    "cuarenta": 40,
+    "cincuenta": 50,
+    "cien": 100,
 }
 _UNIDADES_COMERCIALES = {
     "hora": ("hora", "horas", "hr", "hrs", "h"),
@@ -169,15 +186,23 @@ def _contiene_termino(texto: str, termino: str) -> bool:
 def _es_objecion_precio_explicita(texto: str) -> bool:
     texto_norm = _normalizar_texto_espanol(texto)
     patrones = (
-        r"\b(?:caro|cara|costoso|costosa|elevado|elevada)\b",
-        r"\b(?:precio|tarifa|cotizacion)\s+(?:es\s+)?"
-        r"(?:muy\s+|demasiado\s+)?(?:alto|alta|elevado|elevada|costoso|costosa)\b",
-        r"\bno\s+me\s+alcanza\b",
-        r"\b(?:excede|supera|se\s+sale\s+de)\s+(?:mi\s+)?presupuesto\b",
-        r"\b(?:puedes|pueden|tienen|hay|aplican?)\b.{0,32}"
-        r"\b(?:descuento|rebaja|promocion)\b",
-        r"\b(?:descuento|rebaja|promocion)\b.{0,32}"
-        r"\b(?:precio|cotizacion|servicio)\b",
+        r"\b(?:caro|cara|carisimo|carisima|carinoso|carinosa|costoso|costosa|costosisimo|costosisima|elevado|elevada)\b",
+        r"\b(?:precio|tarifa|cotizacion|valor|monto)\s+(?:es\s+|esta\s+)?"
+        r"(?:muy\s+|demasiado\s+|algo\s+)?(?:alto|alta|elevado|elevada|costoso|costosa|pesado|duro|durito)\b",
+        r"\bno\s+me\s+(?:alcanza|da)\b",
+        r"\b(?:excede|supera|se\s+sale\s+de)\s+(?:mi\s+)?(?:presupuesto|bolsillo|posibilidades)\b",
+        r"\bme\s+queda\s+(?:dificil|pesado|duro)\b",
+        r"\b(?:descuentico|descuentazo|rebajita)\b",
+        r"\b(?:bajale|bajar(?:le)?\s+(?:el\s+precio|un\s+poco|un\s+poquito|algo))\b",
+        r"\bmas\s+(?:barato|economico|economica|accesible)\b",
+        r"\b(?:mejor|negociar|ajustar)\s+(?:el\s+)?(?:precio|tarifa|oferta)\b",
+        r"\b(?:la\s+competencia|otro\s+(?:estudio|lado|lugar))\b.{0,32}\b(?:menos|barato|economico)\b",
+        r"\b(?:puedes|pueden|tienen|hay|aplican?|dame|hazme|haceme|manejan|necesito|quiero)\b.{0,32}"
+        r"\b(?:descuento|rebaja|promocion|promo|cupon)\b",
+        r"\b\d{1,2}\s*%\s*(?:de\s+)?(?:descuento|rebaja|menos)\b",
+        r"\b(?:descuento|rebaja|promocion|promo)\b.{0,32}"
+        r"\b(?:precio|cotizacion|servicio|hoy|contado|\d{1,2}\s*%)\b",
+        r"\b(?:por\s+que|xq)\s+tan\s+(?:caro|costoso)\b",
     )
     return any(re.search(patron, texto_norm) for patron in patrones)
 
@@ -185,6 +210,8 @@ def _es_objecion_precio_explicita(texto: str) -> bool:
 def _extraer_hora(texto: str) -> Optional[Tuple[int, int]]:
     """Extrae una hora explícita, sin inferirla cuando el mensaje es ambiguo."""
     texto_norm = _normalizar_fecha_espanol(texto)
+    if re.search(r"\b(?:al\s+|a\s+las?\s+)?mediodia\b|\bmedio\s+dia\b", texto_norm):
+        return 12, 0
     patrones = (
         r"\ba\s+las?\s+(?P<hora>\d{1,2})(?::(?P<minuto>\d{2}))?"
         r"\s*(?P<meridiano>am|pm|a\.?\s*m\.?|p\.?\s*m\.?|"
@@ -522,14 +549,30 @@ class ModeloNLPVentas:
 
         self.modelo_intencion: Pipeline = Pipeline(
             [
-                ("tfidf", TfidfVectorizer(ngram_range=(1, 2), lowercase=True)),
-                ("clf", LogisticRegression(max_iter=500, random_state=42)),
+                (
+                    "tfidf",
+                    TfidfVectorizer(
+                        ngram_range=(1, 2),
+                        lowercase=True,
+                        strip_accents="unicode",
+                        sublinear_tf=True,
+                    ),
+                ),
+                ("clf", LogisticRegression(max_iter=1000, C=2.0, random_state=42)),
             ]
         )
         self.modelo_tono: Pipeline = Pipeline(
             [
-                ("tfidf", TfidfVectorizer(ngram_range=(1, 2), lowercase=True)),
-                ("clf", LogisticRegression(max_iter=500, random_state=42)),
+                (
+                    "tfidf",
+                    TfidfVectorizer(
+                        ngram_range=(1, 2),
+                        lowercase=True,
+                        strip_accents="unicode",
+                        sublinear_tf=True,
+                    ),
+                ),
+                ("clf", LogisticRegression(max_iter=1000, C=2.0, random_state=42)),
             ]
         )
         self.modelo_intencion.fit(textos, intenciones)
@@ -562,25 +605,38 @@ class ModeloNLPVentas:
         tono_ml = str(clases_tono[int(np.argmax(proba_tono))])
 
         palabras_hostiles = (
-            "robo", "estafa", "estafadores", "pesimo", "pésimo", "harto",
-            "porqueria", "porquería", "denunciar", "furioso", "inaceptable",
-            "humano ya", "bot inutil", "bot inútil", "reclamo", "reclamar",
+            "robo", "me robaron", "estafa", "estafadores", "pesimo", "pésimo", "harto",
+            "porqueria", "porquería", "denunciar", "demanda", "superintendencia",
+            "furioso", "inaceptable", "devolucion", "devuelvan mi dinero", "enganado",
+            "humano ya", "bot inutil", "bot inútil", "bot no sirve", "reclamo", "reclamar",
+            "hablar con un humano", "hablar con una persona", "hablar con el dueno",
+            "hablar con el gerente", "hablar con el encargado",
+            "pasame con un humano", "pasame con una persona", "pasame con el dueno",
+            "pasenme con un humano", "comunicame con una persona", "comunicame con el dueno",
+            "conectame con una persona", "conectame con el dueno",
+            "asesor humano", "agente humano", "atencion humana",
         )
         palabras_rechazo = (
             "no voy a comprar", "no me interesa", "declino",
             "cancelar la solicitud", "cancela la solicitud", "cancelo la solicitud",
-            "no lo voy a tomar", "desisto", "rechazo la oferta",
-            "no quiero continuar", "mejor lo dejo asi",
+            "cancelo la cotizacion", "cancelo todo",
+            "no lo voy a tomar", "no voy a tomar", "desisto", "rechazo la oferta",
+            "no quiero continuar", "no deseo continuar", "mejor lo dejo asi",
+            "deja asi", "dejalo asi", "por ahora no", "mejor despues",
+            "en otra ocasion", "no lo quiero", "no me convence",
+            "ya no lo necesito", "no voy a agendar", "paso por ahora",
         )
         palabras_consulta = (
             "vendes", "venden", "vende", "ofreces", "ofrecen", "ofrece",
             "que tienes", "que tienen", "que hay", "que hacen",
             "a que te dedicas", "a que se dedican", "catalogo", "portafolio",
-            "que productos", "que manejas", "que manejan",
+            "que productos", "que manejas", "que manejan", "que paquetes",
+            "que planes", "que servicios", "q servicios",
         )
         palabras_agenda = (
             "agendar", "agenda", "cita", "reservar", "horario", "fecha",
-            "reunion", "reunión", "calendario", "apartar",
+            "reunion", "reunión", "calendario", "apartar", "separa el cupo",
+            "separar el cupo", "cerramos trato", "agendemos", "reservemos",
             "acepto la cotizacion", "acepto la cotización",
             "acepto la propuesta", "acepto la oferta",
         )
@@ -1008,7 +1064,10 @@ class ModeloNLPVentas:
                     cant_personas = _numero_espanol_a_entero(match_personas.group("personas"))
                     if cant_personas is not None and cant_personas > 0:
                         params["cantidad_personas"] = cant_personas
-                elif _contiene_termino(texto_norm, "pareja") or _contiene_termino(texto_norm, "novios"):
+                elif any(
+                    _contiene_termino(texto_norm, par)
+                    for par in ("pareja", "novios", "con mi esposa", "con mi esposo", "con mi novia", "con mi novio")
+                ):
                     params["cantidad_personas"] = 2
 
                 # Detectar locacion exterior vs estudio
@@ -1183,6 +1242,12 @@ class ModeloNLPVentas:
 
         rubros_ajenos = (
             "plomeria", "carpinteria", "construccion", "mecanica", "cirugia",
+            "odontologia", "peluqueria", "barberia", "zapatos", "zapatillas",
+            "llantas", "repuestos", "medicamentos", "farmacia", "mudanza",
+            "fumigacion", "cerrajeria", "electricista", "lavanderia",
+            "pizza", "hamburguesa", "tiquetes aereos", "prestamo bancario",
+            "clases de ingles", "reparacion de celulares", "arreglan celulares",
+            "arreglar carros", "alquiler de carros",
         )
         if "tipo_servicio" not in params and any(
             _contiene_termino(texto_norm, rubro) for rubro in rubros_ajenos
