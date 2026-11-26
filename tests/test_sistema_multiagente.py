@@ -1952,7 +1952,8 @@ def test_negocio_distinto_dinamico_desde_bd() -> None:
                 nombre_cliente="Cliente prueba",
                 texto="Necesito el servicio de Fotografía de Producto E-Commerce",
             )
-            assert res_incompleta["accion"] == "parametros_incompletos"
+            assert res_incompleta["accion"] == "perfilando_parametros"
+            assert res_incompleta["mensajes_fipa_turno"] == []
             assert res_incompleta["resultado"]["faltantes"] == [
                 "sesiones_requeridas",
                 "complejidad",
@@ -1988,7 +1989,8 @@ def test_negocio_distinto_dinamico_desde_bd() -> None:
                     }
                 },
             )
-            assert res_sesion["accion"] == "parametros_incompletos"
+            assert res_sesion["accion"] == "perfilando_parametros"
+            assert res_sesion["mensajes_fipa_turno"] == []
             assert res_sesion["resultado"]["faltantes"] == ["complejidad"]
             parciales = servicio.entorno.perfilesClientes.obtener_parametros_cotizacion(
                 "cli_foto_secuencia"
@@ -2073,8 +2075,7 @@ def test_negocio_distinto_dinamico_desde_bd() -> None:
             conv_ids = [
                 resultado["mensajes_fipa_turno"][0]["fipa_json"][":conversation-id"]
                 for resultado in (
-                    res_incompleta,
-                    res_sesion,
+                    res_cot,
                     res_complejidad,
                     res_aceptacion,
                 )
@@ -2087,7 +2088,8 @@ def test_negocio_distinto_dinamico_desde_bd() -> None:
                 nombre_cliente="Otro cliente",
                 texto="Una sola sesión",
             )
-            assert otro_cliente["accion"] == "parametros_incompletos"
+            assert otro_cliente["accion"] == "perfilando_parametros"
+            assert otro_cliente["mensajes_fipa_turno"] == []
             assert "tipo_servicio" in otro_cliente["resultado"]["faltantes"]
             parciales_otro = servicio.entorno.perfilesClientes.obtener_parametros_cotizacion(
                 "cli_foto_diferente"
@@ -3690,3 +3692,102 @@ def test_bateria_exhaustiva_escenarios_nlp_y_reglas() -> None:
 
     res_fuera = modelo_foto.analizar_mensaje("Hola, ustedes arreglan celulares o hacen plomería?")
     assert res_fuera["parametros_extraidos"].get("fuera_de_alcance") is True
+
+
+def test_preperfilamiento_ventas_evita_failure_y_falla_si_ignora() -> None:
+    """
+    Verifica la regla conversacional para evitar FAILURE prematuro en FIPA-ACL:
+    1) Si el cliente elige un paquete ('Quiero este', 'Elijo Retrato Corporativo', etc.)
+       sin pedir cotizacion explicita todavia, Ventas pregunta los parametros ANTES de escalar
+       y NO emite FAILURE en el monitor.
+    2) Si responde los parametros faltantes, cotiza en verde sin ningun FAILURE.
+    3) Si IGNORA la pregunta y vuelve a repetir 'Quiero ese' sin dar parametros, AHI SI
+       escala a AgenteCotizaciones y emite FAILURE (motivo: parametros_incompletos).
+    4) Si pide cotizacion/precio explicito ('Que valor tiene...', 'Cuanto me costaria...')
+       con parametros faltantes, intenta cotizar de inmediato y emite FAILURE.
+    """
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            # A) Flujo cooperativo: 'Quiero ese' -> 'desarrollo_web' -> '40 horas complejidad 3' (0 FAILURE)
+            t1 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_preperfil_ok",
+                nombre_cliente="Mateo",
+                texto="Quiero este",
+            )
+            assert t1["accion"] == "perfilando_parametros"
+            assert t1["mensajes_fipa_turno"] == []
+            assert "tipo_servicio" in t1["resultado"]["faltantes"]
+
+            t2 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_preperfil_ok",
+                nombre_cliente="Mateo",
+                texto="El primero",
+            )
+            assert t2["accion"] == "perfilando_parametros"
+            assert t2["mensajes_fipa_turno"] == []
+            assert servicio.entorno.perfilesClientes.obtener_parametros_cotizacion(
+                "cli_preperfil_ok"
+            )["tipo_servicio"] == "desarrollo_web"
+
+            t3 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_preperfil_ok",
+                nombre_cliente="Mateo",
+                texto="40 horas complejidad 3",
+            )
+            assert t3["accion"] == "cotizacion_entregada"
+            perfs_ok = _extraer_performativas(t3["mensajes_fipa_turno"])
+            assert perfs_ok == ["REQUEST", "AGREE", "REQUEST", "AGREE", "INFORM", "INFORM"]
+            assert "FAILURE" not in perfs_ok
+
+            # B) Cliente elige paquete y luego IGNORA la pregunta repitiendo 'Quiero ese' -> FAILURE
+            i1 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_ignora",
+                nombre_cliente="Lucia",
+                texto="Me interesa desarrollo web",
+            )
+            assert i1["accion"] == "perfilando_parametros"
+            assert i1["mensajes_fipa_turno"] == []
+
+            i2 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_ignora",
+                nombre_cliente="Lucia",
+                texto="Quiero ese",
+            )
+            assert i2["accion"] == "parametros_incompletos"
+            perfs_ignora = _extraer_performativas(i2["mensajes_fipa_turno"])
+            assert "FAILURE" in perfs_ignora
+
+            # C) Solicitud explicita de precio ('Que valor tiene...' / 'Cuanto me costaria...') -> FAILURE inmediato
+            p1 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_precio_exp_1",
+                nombre_cliente="Sofia",
+                texto="Qué valor tiene el ecommerce?",
+            )
+            assert p1["accion"] == "parametros_incompletos"
+            assert "FAILURE" in _extraer_performativas(p1["mensajes_fipa_turno"])
+
+            p2 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_precio_exp_2",
+                nombre_cliente="Diego",
+                texto="Cuánto me costaría una app móvil?",
+            )
+            assert p2["accion"] == "parametros_incompletos"
+            assert "FAILURE" in _extraer_performativas(p2["mensajes_fipa_turno"])
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())

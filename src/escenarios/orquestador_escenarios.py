@@ -383,6 +383,19 @@ class ServicioMultiagenteComercial:
             and analisis_previo["intencion"] == "solicitud_cotizacion"
         ):
             tipo_evento = "parametros_servicio"
+        elif (
+            esperando_parametros
+            and analisis_previo["intencion"] in {"consulta_servicio", "solicitud_cotizacion"}
+            and not analisis_previo.get("escalamiento_humano")
+            and not tipo_evento_sugerido
+            and not re.match(r"^(?:hola|buenos?\s+d[ií]as?|buenas?\s+(?:tardes|noches)|hey)\W*$", texto.strip().casefold())
+            and "catalogo" not in texto.casefold()
+            and "catálogo" not in texto.casefold()
+            and "portafolio" not in texto.casefold()
+            and "servicios" not in texto.casefold()
+            and "paquetes" not in texto.casefold()
+        ):
+            tipo_evento = "parametros_servicio"
         estaba_pausado = not bool(perfil_previo.get("automatizacion_activa", True))
         if estaba_pausado:
             tipo_evento = "atencion_humana_activa"

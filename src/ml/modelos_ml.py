@@ -207,6 +207,57 @@ def _es_objecion_precio_explicita(texto: str) -> bool:
     return any(re.search(patron, texto_norm) for patron in patrones)
 
 
+def _es_pregunta_catalogo(texto_norm: str) -> bool:
+    """Detecta consultas informativas sobre que servicios o paquetes ofrece el negocio."""
+    patrones = (
+        r"\b(?:que|cuales)\s+(?:servicios|paquetes|planes|productos|opciones|especialidades)\b",
+        r"\bq\s+(?:servicios|paquetes|planes|productos)\b",
+        r"\b(?:informacion|info)\s+(?:general\s+)?(?:sobre|de)\s+(?:sus\s+|los\s+)?servicios\b",
+        r"\b(?:conocer|ver|mostrar|muestrame|enviame|envias)\s+(?:el\s+|sus\s+)?(?:catalogo|portafolio|servicios|paquetes|opciones)\b",
+        r"\b(?:que\s+es\s+lo\s+que\s+ofrecen|que\s+ofrecen|que\s+tienen|que\s+manejan|que\s+venden|a\s+que\s+se\s+dedican)\b",
+        r"\btienen\s+portafolio\b",
+    )
+    return any(re.search(patron, texto_norm) for patron in patrones)
+
+
+def _es_solicitud_cotizacion_explicita(texto_norm: str) -> bool:
+    """
+    Retorna True cuando el cliente solicita explicitamente cotizar o saber precio/valor/costo
+    (ej. 'cotizar', 'cuanto me costaria', 'que valor tiene', 'presupuesto').
+    Distingue peticiones directas de cotizacion frente a elegir un paquete ('quiero este').
+    """
+    if _es_pregunta_catalogo(texto_norm) and "cotiz" not in texto_norm:
+        return False
+    patrones = (
+        r"\bcotiz",
+        r"\bpresupuesto\b",
+        r"\b(?:en\s+)?cuant[oa]\s+(?:me\s+|nos\s+)?(?:cuesta|costaria|costarian|sale|saldria|salen|vale|valen|valdria|seria|cobran|cobrarian|es|cambiaria|queda)\b",
+        r"\ba\s+como\s+(?:es|esta|sale|son|cobran|manejan)\b",
+        r"\b(?:que|cual)\s+(?:valor|precio|costo|tarifa)\b",
+        r"\b(?:dame|dime|enviame|indica(?:me)?|pasame|cual\s+es)\s+(?:el\s+|un\s+)?(?:valor|precio|costo|presupuesto|tarifa)\b",
+        r"\b(?:precio|tarifa|costo|valor)\s+(?:de|del|para|aproximado|estimado|tiene)\b",
+        r"\b(?:precio|tarifas)\b",
+    )
+    return any(re.search(patron, texto_norm) for patron in patrones)
+
+
+def _es_seleccion_paquete(texto_norm: str) -> bool:
+    """Detecta cuando el cliente elige o manifiesta interes por un paquete o servicio."""
+    if _es_pregunta_catalogo(texto_norm):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:quiero|elijo|escojo|selecciono|prefiero|tomo|dame|me\s+interesa|me\s+gustaria|me\s+quedo\s+con)\s+"
+            r"(?:el\s+de\s+|la\s+de\s+|el\s+|la\s+)?(?:ese|esa|eso|este|esta|esto|aquel|aquella|mismo|misma|"
+            r"primer[oa]|segund[oa]|tercer[oa]|cuart[oa]|paquete|servicio|opcion)\b"
+            r"|\b(?:elijo|escojo|selecciono)\b"
+            r"|\b(?:el|la)\s+(?:primer[oa]|segund[oa]|tercer[oa]|cuart[oa])\b"
+            r"|\b(?:paquete|opcion)\s*(?:numero\s*|#)?\s*[1-9]\b",
+            texto_norm,
+        )
+    )
+
+
 def _extraer_hora(texto: str) -> Optional[Tuple[int, int]]:
     """Extrae una hora explícita, sin inferirla cuando el mensaje es ambiguo."""
     texto_norm = _normalizar_fecha_espanol(texto)
@@ -667,6 +718,9 @@ class ModeloNLPVentas:
             and _extraer_hora(texto_norm)
             and not objecion_precio_explicita
         )
+        cotizacion_explicita = _es_solicitud_cotizacion_explicita(texto_norm)
+        es_pregunta_cat = _es_pregunta_catalogo(texto_norm) and not cotizacion_explicita
+        seleccion_paquete = _es_seleccion_paquete(texto_norm)
         senal_reclamo_textual = any(
             _contiene_termino(texto_norm, palabra) for palabra in palabras_hostiles
         )
@@ -724,33 +778,28 @@ class ModeloNLPVentas:
             nivel_indecision = 0.12
             confianza_reglas = 1.0
         elif (
-            contexto_tipo == "parametros_servicio"
-            or "cotiz" in texto_norm
-            or "presupuesto" in texto_norm
-            or bool(parametros.get("es_personalizado"))
+            cotizacion_explicita
+            or contexto_tipo == "parametros_servicio"
             or (
-                parametros.get("cantidad_fotos") is not None
-                and normalizar_unidad_comercial(self.unidad_cantidad) == "sesion"
-            )
-            or (
-                any(
-                    k in parametros
-                    for k in (
-                        "tipo_servicio",
-                        "cantidad_unidades",
-                        "horas_estimadas",
-                        "sesiones_requeridas",
-                        "cantidad_productos",
-                        "complejidad",
-                        "fuera_de_alcance",
+                not es_pregunta_cat
+                and (
+                    bool(parametros.get("es_personalizado"))
+                    or (
+                        parametros.get("cantidad_fotos") is not None
+                        and normalizar_unidad_comercial(self.unidad_cantidad) == "sesion"
                     )
-                )
-                and any(
-                    w in texto_norm
-                    for w in (
-                        "cotiz", "precio", "cuesta", "vale", "presupuesto",
-                        "servicio", "hora", "sesion", "unidad", "fotografia",
-                        "foto", "fotos", "producto", "complejidad", "cuanto",
+                    or seleccion_paquete
+                    or any(
+                        k in parametros
+                        for k in (
+                            "tipo_servicio",
+                            "cantidad_unidades",
+                            "horas_estimadas",
+                            "sesiones_requeridas",
+                            "cantidad_productos",
+                            "complejidad",
+                            "fuera_de_alcance",
+                        )
                     )
                 )
             )
@@ -759,7 +808,7 @@ class ModeloNLPVentas:
             tono = "interesado"
             nivel_indecision = 0.20
             confianza_reglas = 1.0
-        elif contexto_tipo == "consulta_servicio" or any(
+        elif contexto_tipo == "consulta_servicio" or es_pregunta_cat or any(
             _contiene_termino(texto_norm, palabra) for palabra in palabras_consulta
         ):
             intencion = "consulta_servicio"
@@ -810,6 +859,7 @@ class ModeloNLPVentas:
             "probabilidad_modelo": round(confianza_int, 3),
             "confianza_reglas": confianza_reglas,
             "escalamiento_humano": escalamiento_humano,
+            "cotizacion_explicita": bool(cotizacion_explicita),
             "parametros_extraidos": parametros,
         }
 
@@ -847,6 +897,8 @@ class ModeloNLPVentas:
             pendientes.append(etiqueta_cantidad)
 
         requiere_complejidad = bool(meta.get("requiere_complejidad", True))
+        if parametros.get("es_personalizado") or parametros.get("cantidad_fotos") is not None:
+            requiere_complejidad = False
         complejidad = self._entero_no_negativo(parametros.get("complejidad"))
         minimo, maximo = rango_complejidad_servicio(meta, self.rango_complejidad)
         complejidad_valida = (
@@ -944,32 +996,50 @@ class ModeloNLPVentas:
         params: Dict[str, Any] = {}
         texto_norm = _normalizar_texto_espanol(texto_norm)
 
-        # 1. Deteccion dinamica de servicio desde el catalogo de BD
+        # 1. Deteccion dinamica de servicio desde el catalogo de BD (respetando preguntas generales de catalogo)
         meta_servicio_seleccionado: Dict[str, Any] = {}
-        for clave_servicio, meta in self.catalogo_servicios.items():
-            clave_norm = _normalizar_texto_espanol(str(clave_servicio))
-            nombre_norm = _normalizar_texto_espanol(str(meta.get("nombre", "")))
-            if _contiene_termino(texto_norm, clave_norm) or _contiene_termino(
-                texto_norm, clave_norm.replace("_", " ")
-            ):
-                params["tipo_servicio"] = clave_servicio
-                meta_servicio_seleccionado = meta
-                break
-            palabras = [
-                _normalizar_texto_espanol(str(p))
-                for p in meta.get("palabras_clave", [])
-            ]
-            if any(_contiene_termino(texto_norm, palabra) for palabra in palabras):
-                params["tipo_servicio"] = clave_servicio
-                meta_servicio_seleccionado = meta
-                break
-            if nombre_norm and any(
-                len(tok) >= 4 and _contiene_termino(texto_norm, tok)
-                for tok in nombre_norm.split()
-            ):
-                params["tipo_servicio"] = clave_servicio
-                meta_servicio_seleccionado = meta
-                break
+        es_pregunta_catalogo = _es_pregunta_catalogo(texto_norm) and not _es_solicitud_cotizacion_explicita(texto_norm)
+        if not es_pregunta_catalogo:
+            for clave_servicio, meta in self.catalogo_servicios.items():
+                clave_norm = _normalizar_texto_espanol(str(clave_servicio))
+                nombre_norm = _normalizar_texto_espanol(str(meta.get("nombre", "")))
+                if _contiene_termino(texto_norm, clave_norm) or _contiene_termino(
+                    texto_norm, clave_norm.replace("_", " ")
+                ):
+                    params["tipo_servicio"] = clave_servicio
+                    meta_servicio_seleccionado = meta
+                    break
+                palabras = [
+                    _normalizar_texto_espanol(str(p))
+                    for p in meta.get("palabras_clave", [])
+                ]
+                if any(_contiene_termino(texto_norm, palabra) for palabra in palabras):
+                    params["tipo_servicio"] = clave_servicio
+                    meta_servicio_seleccionado = meta
+                    break
+                if nombre_norm and any(
+                    len(tok) >= 4 and _contiene_termino(texto_norm, tok)
+                    for tok in nombre_norm.split()
+                ):
+                    params["tipo_servicio"] = clave_servicio
+                    meta_servicio_seleccionado = meta
+                    break
+
+            if "tipo_servicio" not in params and self.catalogo_servicios:
+                ordinales_catalogo = (
+                    (r"\b(?:el\s+|la\s+)?primer[oa]\b|\b(?:paquete|opcion|numero)\s*(?:#\s*)?1\b", 0),
+                    (r"\b(?:el\s+|la\s+)?segund[oa]\b|\b(?:paquete|opcion|numero)\s*(?:#\s*)?2\b", 1),
+                    (r"\b(?:el\s+|la\s+)?tercer[oa]\b|\b(?:paquete|opcion|numero)\s*(?:#\s*)?3\b", 2),
+                    (r"\b(?:el\s+|la\s+)?cuart[oa]\b|\b(?:paquete|opcion|numero)\s*(?:#\s*)?4\b", 3),
+                    (r"\b(?:el\s+|la\s+)?quint[oa]\b|\b(?:paquete|opcion|numero)\s*(?:#\s*)?5\b", 4),
+                )
+                claves_ordenadas = list(self.catalogo_servicios.keys())
+                for patron_ord, indice_ord in ordinales_catalogo:
+                    if indice_ord < len(claves_ordenadas) and re.search(patron_ord, texto_norm):
+                        clave_ord = claves_ordenadas[indice_ord]
+                        params["tipo_servicio"] = clave_ord
+                        meta_servicio_seleccionado = self.catalogo_servicios[clave_ord]
+                        break
 
         # 2. Deteccion generica de cantidad segun la unidad configurada en BD
         unidad_configurada = str(

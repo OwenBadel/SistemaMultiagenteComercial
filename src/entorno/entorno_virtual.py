@@ -26,6 +26,7 @@ from src.persistencia.repositorio import (
 
 _CLAVE_ESTADO_COTIZACION = "_estado_cotizacion"
 _CLAVE_CAMPOS_PENDIENTES_COTIZACION = "_campos_pendientes_cotizacion"
+_CLAVE_PREPERFILADO_COTIZACION = "_preperfilado_sin_escalar"
 _CLAVE_CONTEXTOS_CONVERSACION = "_contextos_conversacion"
 
 
@@ -225,9 +226,27 @@ class Informacion:
             not in {
                 _CLAVE_ESTADO_COTIZACION,
                 _CLAVE_CAMPOS_PENDIENTES_COTIZACION,
+                _CLAVE_PREPERFILADO_COTIZACION,
                 _CLAVE_CONTEXTOS_CONVERSACION,
             }
         }
+
+    def es_preperfilado_cotizacion(
+        self, id_cliente: str, conversation_id: Optional[str] = None
+    ) -> bool:
+        """Indica si los parametros pendientes vienen de perfilamiento previo sin FAILURE."""
+        perfil = self.perfiles.get(id_cliente, {})
+        parametros = perfil.get("parametros_parciales", {})
+        if not isinstance(parametros, dict):
+            return False
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            parametros = contexto.get("parametros_cotizacion", {})
+            if not isinstance(parametros, dict):
+                return False
+        return bool(parametros.get(_CLAVE_PREPERFILADO_COTIZACION, False))
 
     def obtener_campos_cotizacion_pendientes(
         self, id_cliente: str, conversation_id: Optional[str] = None
@@ -282,10 +301,12 @@ class Informacion:
         parametros: Dict[str, Any],
         campos: List[str],
         conversation_id: Optional[str] = None,
+        preperfilado: bool = False,
     ) -> Dict[str, Any]:
         """Persiste parametros y campos faltantes para continuar en otro turno."""
         parametros_persistidos = dict(parametros)
         parametros_persistidos[_CLAVE_CAMPOS_PENDIENTES_COTIZACION] = list(campos)
+        parametros_persistidos[_CLAVE_PREPERFILADO_COTIZACION] = bool(preperfilado)
         if conversation_id:
             contexto = self._obtener_contexto_conversacion(
                 id_cliente, conversation_id

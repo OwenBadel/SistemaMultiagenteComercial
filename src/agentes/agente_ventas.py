@@ -275,11 +275,11 @@ class AgenteVentas(AgenteBaseMASML):
     @staticmethod
     def _describir_parametro_faltante(campo: str, unidad: str) -> str:
         mapa = {
-            "tipo_servicio": "qué servicio necesitas",
+            "tipo_servicio": "qué servicio o paquete necesitas",
             "horas_estimadas": "cuántas horas aproximadas estimas",
             "sesiones_requeridas": "cuántas sesiones necesitas",
             "cantidad_unidades": f"la cantidad de {unidad} que necesitas",
-            "complejidad": "el nivel de alcance o detalle del proyecto",
+            "complejidad": "el nivel de complejidad (nivel 1 a 5)",
         }
         return mapa.get(campo, campo.replace("_", " "))
 
@@ -797,24 +797,36 @@ class AgenteVentas(AgenteBaseMASML):
             return
 
         esperando_params = esperando_parametros
-        tiene_nuevos_params = any(
-            k in parametros_extraidos
-            for k in (
-                "tipo_servicio",
-                "cantidad_unidades",
-                "horas_estimadas",
-                "sesiones_requeridas",
-                "cantidad_productos",
-                "cantidad_fotos",
-                "cantidad_personas",
-                "en_exterior",
-                "es_personalizado",
-                "complejidad",
-                "urgencia_dias",
+        era_preperfilado = (
+            esperando_params
+            and self.entorno.perfilesClientes.es_preperfilado_cotizacion(
+                id_cliente, contexto_id
             )
         )
+        claves_cotizacion = (
+            "tipo_servicio",
+            "cantidad_unidades",
+            "horas_estimadas",
+            "sesiones_requeridas",
+            "cantidad_productos",
+            "cantidad_fotos",
+            "cantidad_personas",
+            "en_exterior",
+            "es_personalizado",
+            "complejidad",
+            "urgencia_dias",
+        )
+        tiene_nuevos_params = any(
+            k in parametros_extraidos for k in claves_cotizacion
+        )
+        tiene_progreso_params = any(
+            k in parametros_extraidos
+            and parametros_extraidos[k] != parametros_perfil.get(k)
+            for k in claves_cotizacion
+        )
+        cotizacion_explicita = bool(analisis.get("cotizacion_explicita", False))
 
-        # Paso 2 (Cotizacion): Solicitud de cotizacion o respuesta aclaratoria con parametros
+        # Paso 2 (Cotizacion): Solicitud de cotizacion, seleccion de paquete o respuesta aclaratoria
         if (
             tipo_evento == "parametros_servicio"
             or analisis["intencion"] == "solicitud_cotizacion"
@@ -825,6 +837,21 @@ class AgenteVentas(AgenteBaseMASML):
                     id_cliente, contexto_id
                 )
             )
+            if (
+                "tipo_servicio" in parametros_extraidos
+                and params_previos.get("tipo_servicio")
+                and parametros_extraidos["tipo_servicio"] != params_previos.get("tipo_servicio")
+            ):
+                for clave_previa in (
+                    "cantidad_unidades",
+                    "horas_estimadas",
+                    "sesiones_requeridas",
+                    "unidad_cantidad",
+                    "complejidad",
+                    "cantidad_productos",
+                ):
+                    if clave_previa not in parametros_extraidos:
+                        params_previos.pop(clave_previa, None)
             if (
                 "tipo_servicio" in parametros_extraidos
                 and not parametros_extraidos.get("es_personalizado")
@@ -862,7 +889,70 @@ class AgenteVentas(AgenteBaseMASML):
                     self.entorno.perfilesClientes.establecer_fecha_agendamiento_pendiente(
                         id_cliente, fecha_hora_nueva, contexto_id
                     )
-            if esperando_params and tiene_nuevos_params:
+
+            faltantes_ahora = (
+                []
+                if params.get("fuera_de_alcance")
+                else self.modelo_nlp.campos_cotizacion_pendientes(params)
+            )
+            # Perfilamiento previo en Ventas: si eligio un paquete o no pidio cotizacion explicita
+            # todavia (y no ha ignorado una pregunta previa), pregunta los datos ANTES de escalar
+            # evitando un FAILURE prematuro en el Monitor FIPA-ACL.
+            debe_preperfilar = bool(
+                faltantes_ahora
+                and not cotizacion_explicita
+                and (
+                    not esperando_params
+                    or (era_preperfilado and tiene_progreso_params)
+                )
+            )
+            if debe_preperfilar:
+                self.entorno.perfilesClientes.registrar_parametros_cotizacion_pendientes(
+                    id_cliente,
+                    parametros=params,
+                    campos=faltantes_ahora,
+                    conversation_id=contexto_id,
+                    preperfilado=True,
+                )
+                catalogo = self.entorno.plataformas.portafolio_servicios
+                unidad = str(self.entorno.config_negocio.get("unidad_cantidad", "unidades"))
+                descripciones = [
+                    self._describir_parametro_faltante(str(c), unidad)
+                    for c in faltantes_ahora
+                ]
+                tipo_sel = str(params.get("tipo_servicio", "")).strip()
+                if tipo_sel and tipo_sel in catalogo:
+                    nombre_sel = str(catalogo[tipo_sel].get("nombre", tipo_sel))
+                    texto_preg = (
+                        f"Excelente elección con {nombre_sel}. "
+                        f"Para prepararte la cotización exacta, cuéntame por favor {', '.join(descripciones)}."
+                    )
+                else:
+                    nombres_cat = ", ".join(
+                        str(meta.get("nombre", k)) for k, meta in catalogo.items()
+                    )
+                    cant_desc = self._describir_parametro_faltante(
+                        str(next((c for c in faltantes_ahora if c not in {"tipo_servicio", "complejidad"}), "")),
+                        unidad,
+                    )
+                    pregunta_cant = f" y {cant_desc}" if cant_desc else ""
+                    texto_preg = (
+                        f"Con gusto te ayudo. Contamos con: {nombres_cat}. "
+                        f"¿Cuál de nuestros paquetes te interesa{pregunta_cant}?"
+                    )
+                res = self.responderLenguajeNatural(
+                    "perfilamiento_parametros", canal, id_cliente, texto_preg
+                )
+                self.marcar_ciclo_completado(
+                    {
+                        "resultado": "perfilando_parametros",
+                        "faltantes": faltantes_ahora,
+                        "envio": res,
+                    }
+                )
+                return
+
+            if esperando_params and tiene_nuevos_params and not era_preperfilado:
                 await self.escalarCasoACoordinador(
                     comportamiento=comportamiento,
                     performativa="INFORM",
