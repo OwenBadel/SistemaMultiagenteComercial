@@ -374,6 +374,8 @@ class ServicioMultiagenteComercial:
         ):
             tipo_evento = "parametros_servicio"
         estaba_pausado = not bool(perfil_previo.get("automatizacion_activa", True))
+        if estaba_pausado:
+            tipo_evento = "atencion_humana_activa"
         esperar_coordinador = (
             not estaba_pausado and analisis_previo.get("escalamiento_humano", False)
         )
