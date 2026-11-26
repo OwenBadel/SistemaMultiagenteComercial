@@ -253,6 +253,12 @@ class ServicioMultiagenteComercial:
         if isinstance(envio, dict) and envio.get("contenido"):
             return str(envio["contenido"])
         if accion == "automatizacion_pausada":
+            if resultado.get("tipo_escalamiento") == "informacion_no_disponible":
+                return (
+                    "No cuento con esa información verificada en este momento y prefiero no "
+                    "darte un dato impreciso. Ya escalé tu consulta con un asesor humano, "
+                    "quien te responderá directamente por este mismo chat."
+                )
             return (
                 "Tu caso fue escalado directamente con nuestro asesor encargado. "
                 "En un momento te respondera por este mismo chat."
@@ -374,7 +380,11 @@ class ServicioMultiagenteComercial:
             },
         )
         tipo_evento = tipo_evento_sugerido or analisis_previo["intencion"]
-        if contexto_nlp == "aceptar_cotizacion" and analisis_previo["intencion"] != "rechazo_compra":
+        if contexto_nlp == "aceptar_cotizacion" and analisis_previo["intencion"] not in {
+            "rechazo_compra",
+            "reclamo_critico",
+            "consulta_sin_informacion",
+        }:
             tipo_evento = "aceptar_cotizacion"
         elif (
             contexto_nlp == "solicitud_agendamiento"
@@ -383,6 +393,7 @@ class ServicioMultiagenteComercial:
                 "objecion_precio",
                 "rechazo_compra",
                 "reclamo_critico",
+                "consulta_sin_informacion",
                 "solicitud_cotizacion",
             }
         ):

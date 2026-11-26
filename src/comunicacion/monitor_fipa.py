@@ -33,6 +33,7 @@ _ACCIONES_RESUMIBLES = frozenset(
         "aceptar_cotizacion",
         "actualizar_parametros",
         "alerta_caso_critico",
+        "alerta_informacion_no_disponible",
         "aplicar_descuento",
         "aprobar_descuento",
         "automatizacion_pausada",

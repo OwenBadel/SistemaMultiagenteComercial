@@ -165,6 +165,7 @@ _ESQUEMA_NLU_LLAMA: Dict[str, Any] = {
             "type": "string",
             "enum": [
                 "consulta_servicio",
+                "consulta_sin_informacion",
                 "solicitud_cotizacion",
                 "parametros_servicio",
                 "objecion_precio",
@@ -177,6 +178,7 @@ _ESQUEMA_NLU_LLAMA: Dict[str, Any] = {
         "es_saludo_simple": {"type": "boolean"},
         "es_pregunta_catalogo": {"type": "boolean"},
         "cotizacion_explicita": {"type": "boolean"},
+        "informacion_no_disponible": {"type": "boolean"},
         "tono_cliente": {
             "type": "string",
             "enum": ["interesado", "indeciso", "hostil"],
@@ -202,6 +204,7 @@ _ESQUEMA_NLU_LLAMA: Dict[str, Any] = {
         "es_saludo_simple",
         "es_pregunta_catalogo",
         "cotizacion_explicita",
+        "informacion_no_disponible",
         "tono_cliente",
         "nivel_indecision",
         "escalamiento_humano",
@@ -226,8 +229,9 @@ _INSTRUCCION_SISTEMA_NLG = (
     "Redacta respuestas claras, cercanas, naturales y concisas en espanol "
     "(maximo 4 oraciones o lista corta si muestras un catalogo). "
     "Reglas estrictas e inviolables:\n"
-    "1. Nunca inventes precios, descuentos, porcentajes, servicios ni fechas/horarios "
-    "que no figuren en los datos verificados.\n"
+    "1. Nunca inventes precios, descuentos, porcentajes, servicios, direcciones, ubicaciones, "
+    "metodos de pago, tiempos de entrega, politicas, equipos, garantias ni fechas/horarios "
+    "que no figuren literalmente en los datos verificados.\n"
     "2. Conserva de forma exacta todos los montos en dinero ($...), porcentajes (%) "
     "y fechas/horas suministrados.\n"
     "3. Nunca menciones tecnicismos internos como 'parametros obligatorios', 'borrador', 'segun el borrador', "
@@ -576,10 +580,81 @@ def _es_pregunta_catalogo(texto_norm: str) -> bool:
         r"\b(?:te\s+)?(?:pedi|pido|solicite|solicito|necesito|quiero)\s+(?:ver\s+)?"
         r"(?:el\s+|su\s+|tu\s+|un\s+)?(?:catalogo|portafolio)\b",
         r"\b(?:su|tu|el|un)\s+(?:catalogo|portafolio)(?:\s+de\s+servicios?)?\b",
-        r"\b(?:que\s+es\s+lo\s+que\s+ofrecen|que\s+ofrecen|que\s+tienen|que\s+manejan|que\s+venden|a\s+que\s+se\s+dedican)\b",
+        r"\b(?:que\s+es\s+lo\s+que\s+ofrecen|que\s+ofrecen|que\s+tienen|que\s+manejan|que\s+venden|que\s+vendes|a\s+que\s+se\s+dedican)\b",
         r"\b(?:tienen|manejan|cuentan\s+con)\s+(?:un\s+)?(?:catalogo|portafolio)\b",
     )
     return any(re.search(patron, texto_norm) for patron in patrones)
+
+
+_PATRONES_INFO_NO_DISPONIBLE: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    # Ubicacion, direccion, ciudad, cobertura geografica, envios, instalaciones
+    (r"\bdonde\s+(?:estan|quedan?|se\s+encuentran?|queda\s+el\s+estudio|queda\s+la\s+oficina)\b", ()),
+    (r"\b(?:cual\s+es\s+(?:la|su)\s+)?direccion(?:\s+(?:exacta|del\s+estudio|fisica))?\b", ("direccion",)),
+    (r"\b(?:ubicacion|en\s+que\s+ciudad|en\s+que\s+barrio|en\s+que\s+zona)\b", ("ubicacion",)),
+    (r"\b(?:trabajan|atienden|viajan|cubren)\s+en\s+(?:otra|otras)\s+ciudades?\b", ()),
+    (r"\b(?:hacen\s+envios?|envios?\s+internacionales?|domicilio\s+a\s+otra\s+ciudad)\b", ("envio",)),
+    (r"\b(?:tienen|donde\s+esta\s+la)\s+(?:sede|sucursal|tienda\s+fisica|parqueadero)\b", ("parqueadero", "sucursal")),
+    # Metodos de pago, anticipos, cuotas, impuestos, facturacion
+    (r"\b(?:metodos?|medios?|formas?)\s+de\s+pago\b", ("metodo de pago", "medios de pago")),
+    (r"\bcomo\s+(?:se\s+paga|puedo\s+pagar|reciben\s+el\s+pago)\b", ()),
+    (r"\b(?:aceptan|reciben|manejan|se\s+puede\s+pagar\s+con)\s+(?:tarjeta|credito|debito|nequi|daviplata|efectivo|transferencia|bancolombia|pse|paypal|cripto|criptomonedas|bitcoin|dolares|usdt)\b", ("nequi", "daviplata", "paypal", "pse", "cripto")),
+    (r"\b(?:nequi|daviplata|paypal|bancolombia|criptomonedas?|bitcoin)\b", ("nequi", "daviplata", "paypal")),
+    (r"\b(?:pago\s+a|pagar\s+en|a|en)\s+cuotas\b|\bfinanciacion\b", ("cuotas", "financiacion")),
+    (r"\b(?:anticipo|abono\s+inicial|hay\s+que\s+abonar|cuanto\s+(?:es\s+el\s+)?(?:anticipo|abono))\b", ("anticipo", "abono")),
+    (r"\b(?:emiten|dan|generan|hacen|entregan)\s+factura\b|\bfactura\s+electronica\b", ("factura",)),
+    (r"\b(?:cual\s+es\s+(?:el|su)\s+nit|numero\s+de\s+nit|tienen\s+rut|incluye\s+iva|mas\s+iva|con\s+iva|cuenta\s+bancaria)\b", ("nit", "rut", "iva")),
+    # Tiempos de entrega, formatos fisicos/RAW, politicas, garantias, contratos
+    (r"\b(?:en\s+)?cuant[oa]s?\s+(?:dias?|horas?|semanas?|tiempo)\s+(?:se\s+)?(?:demoran?|tardan?|entregan?)\b", ()),
+    (r"\b(?:tiempo|plazo|fecha)\s+de\s+entrega\b|\bcuando\s+entregan\b", ("tiempo de entrega",)),
+    (r"\b(?:entregan|dan|envian|incluye)\s+(?:las\s+)?(?:fotos\s+)?(?:en\s+)?(?:raw|sin\s+editar|impresas|fisicas)\b|\barchivos?\s+raw\b", ("raw", "impresas")),
+    (r"\b(?:impresion\s+fisica|fotos\s+impresas|album\s+impreso|album\s+fisico|retablo|memoria\s+usb|\busb\b)\b", ("album", "impreso", "usb")),
+    (r"\b(?:tienen|cual\s+es\s+la)\s+garantia\b|\bgarantia\s+de\b", ("garantia",)),
+    (r"\bpolitica\s+de\s+(?:cancelacion|reembolso|devolucion|cambios?)\b|\bque\s+pasa\s+si\s+(?:llueve|cancelo|reprogramo)\b", ()),
+    (r"\b(?:derechos?\s+de\s+autor|(?:firman|hacen|hay)\s+contrato|clausulas?)\b", ("derechos de autor", "contrato")),
+    # Equipos, personal, extras fuera de catalogo, horario de apertura
+    (r"\bque\s+(?:camara|camaras|lente|lentes|equipo|equipos)\s+(?:usan|utilizan|tienen|manejan)\b", ()),
+    (r"\b(?:usan|incluye|tienen|tomas\s+con|con)\s+dron(?:es)?\b|\bdron(?:es)?\b", ("dron", "drone")),
+    (r"\b(?:cabina\s+360|photobooth|maquillaje|maquilladora|peinado|vestuario|estilista|modelos?)\b", ("cabina 360", "photobooth", "maquillaje", "vestuario", "peinado", "modelos")),
+    (r"\bcuant[oa]s?\s+fotograf[oa]s?\b", ()),
+    (r"\bhorarios?\s+de\s+atencion\b|\ba\s+que\s+hora\s+(?:abren|cierran)\b|\b(?:abren|atienden|trabajan)\s+(?:los\s+)?(?:domingos?|festivos?|sabados?|semana\s+santa)\b", ("horario de atencion",)),
+    # Redes, portafolio externo, equipo humano, alquiler, convenios
+    (r"\b(?:tienen|cual\s+es\s+(?:su|tu|el|la))\s+(?:instagram|tiktok|facebook|portafolio\s+web|pagina\s+web|sitio\s+web)\b", ("instagram", "tiktok", "facebook")),
+    (r"\b(?:fotos\s+de\s+muestra|trabajos?\s+anteriores|ejemplos?\s+de\s+trabajo)\b", ()),
+    (r"\b(?:cuantos?\s+)?anos\s+de\s+experiencia\b|\bquien\s+es\s+el\s+(?:fotografo|dueno|encargado|gerente)\b", ()),
+    (r"\b(?:alquilan|prestan|arriendan)\s+(?:camaras?|equipos?|lentes?|el\s+estudio|luces?)\b|\bconvenios?\b", ("alquiler", "convenio")),
+    # Conocimiento general / fuera de dominio
+    (r"\b(?:quien\s+es\s+el\s+presidente|cual\s+es\s+la\s+capital|que\s+clima\s+hace|receta\s+de|como\s+se\s+(?:prepara|cocina)|que\s+hora\s+es\s+en|ayudame\s+con\s+mi\s+tarea|cuenta(?:me)?\s+un\s+chiste)\b", ()),
+)
+
+
+def _detectar_consulta_sin_informacion(
+    texto_norm: str,
+    contexto_negocio: Optional[Dict[str, Any]] = None,
+    catalogo_servicios: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    Detecta preguntas cuya respuesta no existe en la BD, reglas de negocio ni codigo.
+    Respeta dinamicamente lo que si este documentado en el negocio o en servicios.descripcion.
+    """
+    if not texto_norm:
+        return False
+    partes_bd: List[str] = []
+    if contexto_negocio:
+        partes_bd.append(str(contexto_negocio.get("nombre_negocio", "")))
+        partes_bd.append(str(contexto_negocio.get("rubro", "")))
+        partes_bd.append(str(contexto_negocio.get("mensaje_catalogo_intro", "")))
+    if catalogo_servicios:
+        for meta in catalogo_servicios.values():
+            partes_bd.append(str(meta.get("nombre", "")))
+            partes_bd.append(str(meta.get("descripcion", "")))
+    texto_bd = _normalizar_texto_espanol(" ".join(partes_bd))
+
+    for patron, palabras_en_bd in _PATRONES_INFO_NO_DISPONIBLE:
+        if re.search(patron, texto_norm):
+            if palabras_en_bd and any(p in texto_bd for p in palabras_en_bd):
+                continue
+            return True
+    return False
 
 
 def _es_solicitud_cotizacion_explicita(texto_norm: str) -> bool:
@@ -732,32 +807,37 @@ class MotorLlamaVentas:
         sistema = (
             f"Analizador NLU de '{nombre_neg}' (rubro: {rubro}, unidad: {self.unidad_cantidad}). "
             "Responde SOLO JSON valido con estas claves:\n"
-            "intencion ('consulta_servicio'|'solicitud_cotizacion'|'parametros_servicio'|'objecion_precio'|"
+            "intencion ('consulta_servicio'|'consulta_sin_informacion'|'solicitud_cotizacion'|'parametros_servicio'|'objecion_precio'|"
             "'solicitud_agendamiento'|'aceptar_cotizacion'|'rechazo_compra'|'reclamo_critico'), "
             "es_saludo_simple (bool), es_pregunta_catalogo (bool), cotizacion_explicita (bool), "
+            "informacion_no_disponible (bool), "
             "tono_cliente ('interesado'|'indeciso'|'hostil'), nivel_indecision (0..1), escalamiento_humano (bool), "
             f"tipo_servicio (SOLO una de [{claves_validas}] o null), cantidad_unidades (int|null), "
             f"complejidad ({self.rango_complejidad[0]}..{self.rango_complejidad[1]}|null), urgencia_dias (int|null), "
             "incluye_adicional (bool), descuento_solicitado_cliente (number|null), es_personalizado (bool), "
             "descripcion_personalizada (string|null), cantidad_fotos (int|null), cantidad_personas (int|null), "
             "en_exterior (bool|null), fuera_de_alcance (bool), fecha_hora_texto (string|null).\n"
-            "Catalogo:\n" + "\n".join(lineas_catalogo) + "\n"
+            "Catalogo (UNICA informacion verificada que conoce el sistema sobre servicios):\n" + "\n".join(lineas_catalogo) + "\n"
             "Reglas:\n"
-            "- Saludo ('hola','buenas'): intencion='consulta_servicio', es_saludo_simple=true, tipo_servicio=null.\n"
-            "- Pedir catalogo/servicios/paquetes ('ver su catalogo','su catalogo de servicio','que ofrecen','te pedi el catalogo'): "
-            "intencion='consulta_servicio', es_pregunta_catalogo=true, tipo_servicio=null, cotizacion_explicita=false.\n"
-            "- Pregunta informativa sobre un servicio especifico o cobertura SIN pedir precio ni cambiar cantidad ('que trae ese paquete','que incluye','cuantas fotos trae','en base a que sacas ese valor'): "
-            "intencion='consulta_servicio', es_pregunta_catalogo=false, cotizacion_explicita=false, manteniendo tipo_servicio si menciona un paquete.\n"
-            "- Elegir paquete sin pedir precio ('quiero este','sesion para mi boda'): intencion='solicitud_cotizacion', cotizacion_explicita=false. "
+            "- Saludo ('hola','buenas'): intencion='consulta_servicio', es_saludo_simple=true, informacion_no_disponible=false, tipo_servicio=null.\n"
+            "- Pedir catalogo/servicios/paquetes ('ver su catalogo','su catalogo de servicio','que ofrecen','que venden','te pedi el catalogo'): "
+            "intencion='consulta_servicio', es_pregunta_catalogo=true, informacion_no_disponible=false, tipo_servicio=null, cotizacion_explicita=false.\n"
+            "- Pregunta informativa cuya respuesta SI esta en el Catalogo o en la cotizacion ya entregada ('que trae ese paquete','que incluye','cuantas fotos trae','en base a que sacas ese valor'): "
+            "intencion='consulta_servicio', es_pregunta_catalogo=false, informacion_no_disponible=false, cotizacion_explicita=false, manteniendo tipo_servicio si menciona un paquete.\n"
+            "- CERO INVENCION / ESCALAMIENTO POR DESCONOCIMIENTO: Si el cliente pregunta CUALQUIER dato o politica que NO este literalmente en el Catalogo ni corresponda a cotizar/ajustar un servicio, promocion o agendar cita "
+            "(por ejemplo: direccion/ubicacion/ciudad, metodos de pago/Nequi/tarjeta/cuotas/anticipo, factura/NIT/IVA, tiempos de entrega, archivos RAW/impresiones/album, drones, camaras/lentes/equipos, maquillaje/vestuario/modelos, politicas de cancelacion/reembolso/lluvia, horarios de atencion/domingos/festivos, redes/Instagram/fotos de muestra, experiencia/personal, convenios, alquiler de equipos o preguntas generales ajenas al negocio): "
+            "DEBES responder intencion='consulta_sin_informacion', informacion_no_disponible=true, escalamiento_humano=true, tono_cliente='interesado', es_saludo_simple=false, es_pregunta_catalogo=false, cotizacion_explicita=false.\n"
+            "- Elegir paquete sin pedir precio ('quiero este','sesion para mi boda'): intencion='solicitud_cotizacion', cotizacion_explicita=false, informacion_no_disponible=false. "
             "Mapea bodas/fiestas/grados/bautizos a la clave de eventos del catalogo (ej. 'cobertura_evento') y fotos familiares/pareja/perfil a retrato si existen en el catalogo.\n"
             "- NUNCA asumas cantidad_unidades=1 si el cliente no dijo explicitamente un numero de sesiones/horas/unidades; en ese caso deja cantidad_unidades=null.\n"
-            "- Pedir precio/cotizar ('cuanto cuesta','cotizame','que valor tiene'): intencion='solicitud_cotizacion', cotizacion_explicita=true.\n"
-            "- Si campos_pendientes_cotizacion tiene datos y responde un dato (ej.'3','2 sesiones'): intencion='parametros_servicio'.\n"
-            "- Caro/descuento: intencion='objecion_precio', tono_cliente='indeciso', nivel_indecision>=0.72.\n"
-            "- Acepta cotizacion o pide cita/fecha: intencion='aceptar_cotizacion' o 'solicitud_agendamiento'.\n"
-            "- Rechaza compra ('no quiero','cancelo'): intencion='rechazo_compra'.\n"
-            "- Insulto/estafa/pide humano o dueno: intencion='reclamo_critico', tono_cliente='hostil', escalamiento_humano=true.\n"
-            "- Rubro ajeno (plomeria,pizza,celulares): fuera_de_alcance=true, tipo_servicio=null."
+            "- Pedir precio/cotizar ('cuanto cuesta','cotizame','que valor tiene'): intencion='solicitud_cotizacion', cotizacion_explicita=true, informacion_no_disponible=false.\n"
+            "- Si campos_pendientes_cotizacion tiene datos y responde un dato (ej.'3','2 sesiones'): intencion='parametros_servicio', informacion_no_disponible=false.\n"
+            "- Si paso_reserva es 'nombre_cliente','cedula' o 'telefono' y responde con ese dato sin hacer una pregunta externa: informacion_no_disponible=false, escalamiento_humano=false.\n"
+            "- Caro/descuento: intencion='objecion_precio', tono_cliente='indeciso', nivel_indecision>=0.72, informacion_no_disponible=false.\n"
+            "- Acepta cotizacion o pide cita/fecha: intencion='aceptar_cotizacion' o 'solicitud_agendamiento', informacion_no_disponible=false.\n"
+            "- Rechaza compra ('no quiero','cancelo'): intencion='rechazo_compra', informacion_no_disponible=false.\n"
+            "- Insulto/estafa/pide humano o dueno: intencion='reclamo_critico', tono_cliente='hostil', escalamiento_humano=true, informacion_no_disponible=false.\n"
+            "- Solicitud explicita de cotizar un rubro ajeno (ej. 'cotizar plomeria de 20 horas'): intencion='solicitud_cotizacion', fuera_de_alcance=true, informacion_no_disponible=false, escalamiento_humano=false, tipo_servicio=null."
         )
 
         bloque_historial = ""
@@ -846,6 +926,7 @@ class MotorLlamaVentas:
         contexto_tipo: Optional[str],
         campos_pendientes: List[str],
         parametros_acumulados: Dict[str, Any],
+        estado_conversacion: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Valida y normaliza la salida JSON de Llama aplicando guardas de negocio."""
         texto_norm = _normalizar_texto_espanol(texto)
@@ -858,6 +939,8 @@ class MotorLlamaVentas:
         es_pregunta_cat = bool(datos_llama.get("es_pregunta_catalogo")) or _es_pregunta_catalogo(texto_norm)
         cotizacion_explicita = bool(datos_llama.get("cotizacion_explicita")) or _es_solicitud_cotizacion_explicita(texto_norm)
         escalamiento_humano = bool(datos_llama.get("escalamiento_humano"))
+        paso_reserva = str((estado_conversacion or {}).get("paso_reserva") or "")
+        recolectando_datos_reserva = paso_reserva in {"nombre_cliente", "cedula", "telefono"}
 
         # Guarda determinista de seguridad para Human-in-the-Loop (defensa en profundidad)
         senal_reclamo = any(
@@ -870,6 +953,34 @@ class MotorLlamaVentas:
             intencion = "reclamo_critico"
             tono = "hostil"
             escalamiento_humano = True
+            informacion_no_disponible = False
+        else:
+            senal_sin_info_det = _detectar_consulta_sin_informacion(
+                texto_norm,
+                contexto_negocio=self.contexto_negocio,
+                catalogo_servicios=self.catalogo_servicios,
+            )
+            senal_sin_info_llama = bool(datos_llama.get("informacion_no_disponible")) or (
+                intencion == "consulta_sin_informacion"
+            )
+            # Evitar falsos positivos si solo entrega nombre/cedula/telefono en paso de reserva
+            if recolectando_datos_reserva and "?" not in texto and not senal_sin_info_det:
+                senal_sin_info_llama = False
+                if intencion == "consulta_sin_informacion":
+                    intencion = "consulta_servicio"
+                    escalamiento_humano = False
+            informacion_no_disponible = bool(
+                (senal_sin_info_llama or senal_sin_info_det)
+                and not (bool(datos_llama.get("fuera_de_alcance")) and cotizacion_explicita)
+            )
+            if informacion_no_disponible:
+                intencion = "consulta_sin_informacion"
+                escalamiento_humano = True
+                es_saludo = False
+                es_pregunta_cat = False
+                cotizacion_explicita = False
+                if tono == "hostil":
+                    tono = "interesado"
 
         try:
             nivel_indecision = float(datos_llama.get("nivel_indecision", 0.20))
@@ -1059,6 +1170,17 @@ class MotorLlamaVentas:
             tono = "hostil"
             escalamiento_humano = True
             nivel_indecision = max(nivel_indecision, 0.90)
+        elif intencion == "consulta_sin_informacion":
+            escalamiento_humano = True
+            informacion_no_disponible = True
+            if tono == "hostil":
+                tono = "interesado"
+
+        motivo_escalamiento = (
+            "informacion_no_disponible"
+            if informacion_no_disponible
+            else ("reclamo_critico" if escalamiento_humano else "")
+        )
 
         return {
             "intencion": intencion,
@@ -1069,6 +1191,8 @@ class MotorLlamaVentas:
             "confianza": 0.95,
             "motor_nlu": f"llama_local:{self.modelo}",
             "escalamiento_humano": escalamiento_humano,
+            "informacion_no_disponible": bool(informacion_no_disponible),
+            "motivo_escalamiento": motivo_escalamiento,
             "cotizacion_explicita": bool(cotizacion_explicita),
             "parametros_extraidos": params,
         }
@@ -1082,6 +1206,7 @@ class MotorLlamaVentas:
         contexto_tipo: Optional[str] = None,
         campos_pendientes: Optional[List[str]] = None,
         parametros_acumulados: Optional[Dict[str, Any]] = None,
+        estado_conversacion: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Respaldo determinista puro (sin Scikit-Learn ni ML) utilizado unicamente
@@ -1129,13 +1254,36 @@ class MotorLlamaVentas:
             contexto_tipo in {"reclamo_critico_cliente", "reclamo_critico"}
             and not parametros_pendientes
         )
+        paso_reserva = str((estado_conversacion or {}).get("paso_reserva") or "")
+        recolectando_datos_reserva = paso_reserva in {"nombre_cliente", "cedula", "telefono"}
+        consulta_sin_info = (
+            not reclamo_explicito
+            and not parametros_pendientes
+            and not (recolectando_datos_reserva and "?" not in texto)
+            and not (parametros.get("fuera_de_alcance") and cotizacion_explicita)
+            and _detectar_consulta_sin_informacion(
+                texto_norm,
+                contexto_negocio=self.contexto_negocio,
+                catalogo_servicios=self.catalogo_servicios,
+            )
+        )
         escalamiento_humano = False
+        informacion_no_disponible = False
 
         if reclamo_explicito:
             intencion = "reclamo_critico"
             tono = "hostil"
             nivel_indecision = 0.90
             escalamiento_humano = True
+        elif consulta_sin_info:
+            intencion = "consulta_sin_informacion"
+            tono = "interesado"
+            nivel_indecision = 0.25
+            escalamiento_humano = True
+            informacion_no_disponible = True
+            es_saludo = False
+            es_pregunta_cat = False
+            cotizacion_explicita = False
         elif es_pregunta_cat and not cotizacion_explicita:
             intencion = "consulta_servicio"
             tono = "interesado"
@@ -1210,6 +1358,12 @@ class MotorLlamaVentas:
             tono = "interesado"
             nivel_indecision = 0.20
 
+        motivo_escalamiento = (
+            "informacion_no_disponible"
+            if informacion_no_disponible
+            else ("reclamo_critico" if escalamiento_humano else "")
+        )
+
         return {
             "intencion": intencion,
             "es_saludo_simple": es_saludo,
@@ -1219,6 +1373,8 @@ class MotorLlamaVentas:
             "confianza": 1.0,
             "motor_nlu": "respaldo_determinista_sin_ml",
             "escalamiento_humano": escalamiento_humano,
+            "informacion_no_disponible": informacion_no_disponible,
+            "motivo_escalamiento": motivo_escalamiento,
             "cotizacion_explicita": bool(cotizacion_explicita),
             "parametros_extraidos": parametros,
         }
@@ -1254,12 +1410,14 @@ class MotorLlamaVentas:
                 contexto_tipo=contexto_tipo,
                 campos_pendientes=pendientes,
                 parametros_acumulados=acumulados,
+                estado_conversacion=estado_conversacion,
             )
         return self._analizar_determinista_sin_ml(
             texto=texto,
             contexto_tipo=contexto_tipo,
             campos_pendientes=pendientes,
             parametros_acumulados=acumulados,
+            estado_conversacion=estado_conversacion,
         )
 
     # ------------------------------------------------------------------

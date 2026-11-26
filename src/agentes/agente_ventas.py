@@ -391,8 +391,9 @@ class AgenteVentas(AgenteBaseMASML):
             texto_base_nlg = (
                 f"Referencia de paquetes de {nombre_negocio} (SIN dar precios, los precios solo los calcula cotizaciones):\n"
                 + "\n".join(lineas_sin_precio)
-                + "\nResponde directamente a la necesidad del cliente sin inventar precios ni repetir mecanicamente la lista, "
-                "y sugiere como adaptar alguno de nuestros paquetes o preguntale detalles para cotizarlo."
+                + "\nResponde directamente a la necesidad del cliente sin inventar precios, ubicacion, "
+                "metodos de pago, tiempos de entrega, politicas ni equipos que no aparezcan arriba; "
+                "sugiere como adaptar alguno de nuestros paquetes o preguntale detalles para cotizarlo."
             )
         else:
             tipo_nlg = "catalogo_servicios"
@@ -680,19 +681,35 @@ class AgenteVentas(AgenteBaseMASML):
             id_cliente, tono_actual=analisis["tono_cliente"]
         )
 
-        # Solo señales verificadas o una predicción crítica suficientemente fuerte escalan.
+        # Escala a humano ante reclamo critico/hostil o pregunta cuya informacion no esta en la BD/reglas/codigo.
         if analisis.get("escalamiento_humano", False):
+            es_sin_info = bool(
+                analisis.get("informacion_no_disponible")
+                or analisis.get("intencion") == "consulta_sin_informacion"
+            )
+            predicado_alerta = (
+                "(alerta_informacion_no_disponible consulta_fuera_de_bd)"
+                if es_sin_info
+                else "(alerta_caso_critico tono_hostil)"
+            )
             await self.escalarCasoACoordinador(
                 comportamiento=comportamiento,
                 performativa="INFORM",
-                predicado="(alerta_caso_critico tono_hostil)",
+                predicado=predicado_alerta,
                 protocolo="FIPA-Request",
                 conversation_id=conversation_id,
                 payload_extra={
                     "id_cliente": id_cliente,
                     "canal": canal,
-                    "motivo_critico": texto,
-                    "tono_cliente": "hostil",
+                    "motivo_critico": (
+                        f"informacion_no_disponible: {texto}"
+                        if es_sin_info
+                        else texto
+                    ),
+                    "tipo_escalamiento": (
+                        "informacion_no_disponible" if es_sin_info else "reclamo_critico"
+                    ),
+                    "tono_cliente": "interesado" if es_sin_info else "hostil",
                 },
             )
             return
@@ -1126,8 +1143,7 @@ class AgenteVentas(AgenteBaseMASML):
                 )
                 texto_detalle = (
                     f"El servicio {nombre_serv} incluye: {desc_serv} "
-                    f"(sin dar precios todavia). Si deseas una cotizacion formal, "
-                    f"cuentame cuantas {unidad_serv} necesitas."
+                    f"Si deseas una cotizacion formal, cuentame cuantas {unidad_serv} necesitas."
                 )
                 res = self.responderLenguajeNatural(
                     "asesoria_servicio_especifico",
@@ -1873,5 +1889,13 @@ class AgenteVentas(AgenteBaseMASML):
                 conversation_id=conv_id,
                 payload_extra={"id_cliente": id_cliente, "canal": canal},
             )
-            self.marcar_ciclo_completado({"resultado": "automatizacion_pausada", "id_cliente": id_cliente})
+            self.marcar_ciclo_completado(
+                {
+                    "resultado": "automatizacion_pausada",
+                    "id_cliente": id_cliente,
+                    "tipo_escalamiento": str(
+                        payload.get("tipo_escalamiento", "reclamo_critico")
+                    ),
+                }
+            )
 

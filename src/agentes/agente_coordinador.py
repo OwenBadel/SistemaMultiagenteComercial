@@ -449,11 +449,17 @@ class AgenteCoordinador(AgenteBaseMASML):
         )
 
     def evaluarRiesgoYSuspenderSistema(self, motivo_critico: str) -> Dict[str, Any]:
-        """Evalúa el riesgo crítico reportado por Ventas y prepara la pausa del sistema."""
+        """Evalúa el riesgo crítico o falta de información reportada por Ventas y prepara la pausa del sistema."""
+        es_sin_info = str(motivo_critico or "").startswith("informacion_no_disponible")
         self.registrar_accion(
-            "evaluarRiesgoYSuspenderSistema()", "riesgo=CRITICO"
+            "evaluarRiesgoYSuspenderSistema()",
+            "motivo=informacion_no_disponible" if es_sin_info else "riesgo=CRITICO",
         )
-        return {"riesgo": "alto", "suspender_automatizacion": True, "motivo": motivo_critico}
+        return {
+            "riesgo": "desconocimiento" if es_sin_info else "alto",
+            "suspender_automatizacion": True,
+            "motivo": motivo_critico,
+        }
 
     def pausarYAlertarHumano(
         self, historial_charla: List[Dict[str, Any]], motivo_critico: str, id_cliente: str
@@ -534,9 +540,24 @@ class AgenteCoordinador(AgenteBaseMASML):
                         "estado": "descartada",
                     },
                 )
-            elif perf == "INFORM" and "alerta_caso_critico" in contenido:
+            elif perf == "INFORM" and (
+                "alerta_caso_critico" in contenido
+                or "alerta_informacion_no_disponible" in contenido
+            ):
                 motivo = str(payload.get("motivo_critico", "tono_hostil"))
-                self._contexto_conversaciones[conv_id] = {**payload, "motivo_critico": motivo}
+                tipo_escalamiento = str(
+                    payload.get(
+                        "tipo_escalamiento",
+                        "informacion_no_disponible"
+                        if "alerta_informacion_no_disponible" in contenido
+                        else "reclamo_critico",
+                    )
+                )
+                self._contexto_conversaciones[conv_id] = {
+                    **payload,
+                    "motivo_critico": motivo,
+                    "tipo_escalamiento": tipo_escalamiento,
+                }
                 self.evaluarRiesgoYSuspenderSistema(motivo)
                 await self.enviar_fipa(
                     comportamiento,
@@ -548,6 +569,7 @@ class AgenteCoordinador(AgenteBaseMASML):
                     payload_extra={
                         "id_cliente": payload.get("id_cliente", "cliente_001"),
                         "canal": payload.get("canal", "WhatsApp"),
+                        "tipo_escalamiento": tipo_escalamiento,
                     },
                 )
             elif perf == "CONFIRM" and "automatizacion_pausada" in contenido:

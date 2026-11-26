@@ -3823,3 +3823,164 @@ def test_preperfilamiento_ventas_evita_failure_y_falla_si_ignora() -> None:
             await servicio.detener()
 
     asyncio.run(_run())
+
+
+def test_consulta_fuera_de_bd_escala_a_humano_sin_inventar() -> None:
+    """
+    Verifica que cualquier pregunta cuya respuesta no este en la BD, reglas de
+    negocio ni codigo escale formalmente a humano (INFORM -> CANCEL -> CONFIRM),
+    pause el chat, notifique al dueno y no invente datos.
+    """
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            preguntas_sin_info = [
+                ("cli_info_1", "¿Dónde están ubicados exactamente?"),
+                ("cli_info_2", "¿Aceptan pago por Nequi o a cuotas?"),
+                ("cli_info_3", "¿En cuántos días entregan y entregan archivos RAW?"),
+                ("cli_info_4", "¿Cuál es el horario de atención los domingos?"),
+                ("cli_info_5", "¿Quién es el presidente de Colombia?"),
+            ]
+            for cid, texto_preg in preguntas_sin_info:
+                res = await servicio.procesar_mensaje_entrante(
+                    canal="Webchat",
+                    id_cliente=cid,
+                    nombre_cliente="Laura Gomez",
+                    texto=texto_preg,
+                )
+                perfs = _extraer_performativas(res["mensajes_fipa_turno"])
+                assert perfs == ["INFORM", "CANCEL", "CONFIRM"], (cid, perfs)
+                assert (
+                    res["mensajes_fipa_turno"][0]["fipa_json"][":content"]
+                    == "accion=alerta_informacion_no_disponible"
+                )
+                assert res["accion"] == "automatizacion_pausada"
+                assert res["pausado_humano"] is True
+                assert res["notificar_dueno"] is True
+                assert res["responder_al_cliente"] is True
+                assert res["tono_cliente"] == "interesado"
+                assert res["intencion"] == "consulta_sin_informacion"
+                assert "No cuento con esa información verificada" in res["respuesta"]
+                assert "informacion_no_disponible:" in res["mensaje_notificacion_dueno"]
+
+            # Segundo turno mientras esta pausado: silencio automatico
+            res_silencio = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_info_1",
+                nombre_cliente="Laura Gomez",
+                texto="Hola, siguen ahi?",
+            )
+            assert res_silencio["accion"] == "en_atencion_humana"
+            assert res_silencio["responder_al_cliente"] is False
+            assert res_silencio["respuesta"] == ""
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
+
+def test_consulta_novedosa_marcada_por_llama_sin_info_escala_a_humano() -> None:
+    """
+    Verifica que cuando Llama detecta una pregunta novedosa fuera de BD
+    (ej. aire acondicionado/cafe en el estudio, no listada en regex) y marca
+    informacion_no_disponible=True, el SMA escala a humano sin inventar.
+    """
+    import json as _json
+
+    class _RespuestaFalsa:
+        def __init__(self, content: str) -> None:
+            self.message = type("Msg", (), {"content": content})()
+
+    class _ClienteLlamaSinInfo:
+        def chat(self, model, messages, **kwargs):
+            return _RespuestaFalsa(
+                _json.dumps(
+                    {
+                        "intencion": "consulta_sin_informacion",
+                        "es_saludo_simple": False,
+                        "es_pregunta_catalogo": False,
+                        "cotizacion_explicita": False,
+                        "informacion_no_disponible": True,
+                        "tono_cliente": "interesado",
+                        "nivel_indecision": 0.2,
+                        "escalamiento_humano": True,
+                        "tipo_servicio": None,
+                        "cantidad_unidades": None,
+                        "complejidad": None,
+                        "urgencia_dias": None,
+                        "incluye_adicional": False,
+                        "descuento_solicitado_cliente": None,
+                        "es_personalizado": False,
+                        "descripcion_personalizada": None,
+                        "cantidad_fotos": None,
+                        "cantidad_personas": None,
+                        "en_exterior": None,
+                        "fuera_de_alcance": False,
+                        "fecha_hora_texto": None,
+                    }
+                )
+            )
+
+    motor = MotorLlamaVentas(
+        modelo="llama3.1:8b",
+        cliente_ollama=_ClienteLlamaSinInfo(),
+        habilitado=True,
+    )
+
+    async def _run() -> None:
+        servicio = ServicioMultiagenteComercial(
+            config_botpress=ConfiguracionBotpress(),
+            motor_llama=motor,
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            res = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_novedosa",
+                nombre_cliente="Andres Ruiz",
+                texto="¿El estudio tiene aire acondicionado y ofrecen café?",
+            )
+            assert _extraer_performativas(res["mensajes_fipa_turno"]) == [
+                "INFORM",
+                "CANCEL",
+                "CONFIRM",
+            ]
+            assert res["accion"] == "automatizacion_pausada"
+            assert res["pausado_humano"] is True
+            assert res["notificar_dueno"] is True
+            assert "No cuento con esa información verificada" in res["respuesta"]
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())
+
+
+def test_respeto_dinamico_si_concepto_si_existe_en_bd() -> None:
+    """
+    Si un negocio SI documenta un termino (ej. 'dron') en servicios.descripcion,
+    no debe escalar falsamente por el filtro determinista.
+    """
+    catalogo_con_dron = {
+        "video_aereo": {
+            "nombre": "Video Aereo Profesional",
+            "descripcion": "Incluye grabacion 4K con dron certificado y edicion.",
+            "tarifa_unitaria": 500000,
+            "palabras_clave": ["dron", "aereo", "video"],
+            "requiere_complejidad": False,
+        }
+    }
+    motor_con_dron = MotorLlamaVentas(
+        catalogo_servicios=catalogo_con_dron,
+        habilitado=False,
+    )
+    res = motor_con_dron.analizar_mensaje("¿El paquete de video aereo incluye dron?")
+    assert res["escalamiento_humano"] is False
+    assert res["informacion_no_disponible"] is False
