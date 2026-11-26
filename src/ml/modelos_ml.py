@@ -1014,7 +1014,12 @@ class ModeloNLPVentas:
                 # Detectar locacion exterior vs estudio
                 if any(
                     _contiene_termino(texto_norm, loc)
-                    for loc in ("exterior", "exteriores", "aire libre", "parque", "playa", "domicilio", "fuera del estudio", "locacion externa", "mi casa")
+                    for loc in (
+                        "exterior", "exteriores", "aire libre", "parque", "playa",
+                        "domicilio", "fuera del estudio", "locacion externa", "mi casa",
+                        "en el centro", "en la boda", "donde es la", "salon", "iglesia",
+                        "finca", "hotel", "oficina", "oficinas", "en otro lugar",
+                    )
                 ):
                     params["en_exterior"] = True
                 elif any(
@@ -1059,9 +1064,13 @@ class ModeloNLPVentas:
                 if params.get("es_personalizado"):
                     if "tipo_servicio" not in params:
                         clave_default = (
-                            "retrato_corporativo"
-                            if "retrato_corporativo" in self.catalogo_servicios
-                            else next(iter(self.catalogo_servicios.keys()), "retrato_corporativo")
+                            str(acum["tipo_servicio"])
+                            if acum.get("tipo_servicio") in self.catalogo_servicios
+                            else (
+                                "retrato_corporativo"
+                                if "retrato_corporativo" in self.catalogo_servicios
+                                else next(iter(self.catalogo_servicios.keys()), "retrato_corporativo")
+                            )
                         )
                         params["tipo_servicio"] = clave_default
                         meta_servicio_seleccionado = self.catalogo_servicios.get(clave_default, {})
