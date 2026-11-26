@@ -3787,6 +3787,39 @@ def test_preperfilamiento_ventas_evita_failure_y_falla_si_ignora() -> None:
             )
             assert p2["accion"] == "parametros_incompletos"
             assert "FAILURE" in _extraer_performativas(p2["mensajes_fipa_turno"])
+
+            # D) Solicitud de catalogo con posesivo singular ('ver su catalogo') y correccion explicita
+            c1 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_catalogo_su",
+                nombre_cliente="Camila",
+                texto="me gustaria ver su catalogo",
+            )
+            assert c1["accion"] == "catalogo_enviado"
+            assert c1["mensajes_fipa_turno"] == []
+
+            # Aunque hubiera estado esperando parametros, pedir el catalogo limpia el estado y lo envia
+            c2_pre = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_catalogo_corr",
+                nombre_cliente="Camila",
+                texto="Me interesa ecommerce",
+            )
+            assert c2_pre["accion"] == "perfilando_parametros"
+            c2 = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_catalogo_corr",
+                nombre_cliente="Camila",
+                texto="no te pedi ese producto, te pedi el catalogo",
+            )
+            assert c2["accion"] == "catalogo_enviado"
+            assert "FAILURE" not in _extraer_performativas(c2["mensajes_fipa_turno"])
+            assert (
+                servicio.entorno.perfilesClientes.perfiles[
+                    "cli_catalogo_corr"
+                ].get("esperando_parametros_cotizacion")
+                is False
+            )
         finally:
             await servicio.detener()
 

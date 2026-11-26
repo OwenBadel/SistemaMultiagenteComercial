@@ -323,6 +323,28 @@ class Informacion:
             esperando_parametros_cotizacion=True,
         )
 
+    def limpiar_parametros_cotizacion_pendientes(
+        self,
+        id_cliente: str,
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """Limpia los parametros parciales y la bandera de espera cuando el cliente reinicia consulta."""
+        if conversation_id:
+            contexto = self._obtener_contexto_conversacion(
+                id_cliente, conversation_id
+            )
+            contexto["parametros_cotizacion"] = {}
+            contexto["esperando_parametros_cotizacion"] = False
+            self._guardar_contexto_conversacion(
+                id_cliente, conversation_id, contexto
+            )
+            return
+        self.actualizar_perfil(
+            id_cliente,
+            parametros_parciales={},
+            esperando_parametros_cotizacion=False,
+        )
+
     def establecer_fecha_agendamiento_pendiente(
         self,
         id_cliente: str,

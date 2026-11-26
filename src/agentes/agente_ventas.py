@@ -990,6 +990,15 @@ class AgenteVentas(AgenteBaseMASML):
                 or analisis["intencion"] == "consulta_servicio"
             )
         ):
+            if esperando_parametros and (
+                "catalogo" in texto.casefold()
+                or "catálogo" in texto.casefold()
+                or "portafolio" in texto.casefold()
+            ):
+                self.entorno.perfilesClientes.limpiar_parametros_cotizacion_pendientes(
+                    id_cliente,
+                    contexto_id,
+                )
             res = self.enviarCatalogoVisual(canal=canal, id_cliente=id_cliente)
             self.marcar_ciclo_completado(
                 {"accion": "catalogo_enviado", "respuesta": res}

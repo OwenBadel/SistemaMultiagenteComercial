@@ -213,9 +213,13 @@ def _es_pregunta_catalogo(texto_norm: str) -> bool:
         r"\b(?:que|cuales)\s+(?:servicios|paquetes|planes|productos|opciones|especialidades)\b",
         r"\bq\s+(?:servicios|paquetes|planes|productos)\b",
         r"\b(?:informacion|info)\s+(?:general\s+)?(?:sobre|de)\s+(?:sus\s+|los\s+)?servicios\b",
-        r"\b(?:conocer|ver|mostrar|muestrame|enviame|envias)\s+(?:el\s+|sus\s+)?(?:catalogo|portafolio|servicios|paquetes|opciones)\b",
+        r"\b(?:conocer|ver|mostrar|muestrame|enviame|envias|mandame|pasame|comparteme)\s+"
+        r"(?:el\s+|la\s+|los\s+|las\s+|un\s+|su\s+|sus\s+|tu\s+|tus\s+)?"
+        r"(?:catalogo|portafolio|servicios|paquetes|opciones)\b",
+        r"\b(?:te\s+)?(?:pedi|pido|solicite|solicito|necesito|quiero)\s+(?:ver\s+)?"
+        r"(?:el\s+|su\s+|tu\s+|un\s+)?(?:catalogo|portafolio)\b",
         r"\b(?:que\s+es\s+lo\s+que\s+ofrecen|que\s+ofrecen|que\s+tienen|que\s+manejan|que\s+venden|a\s+que\s+se\s+dedican)\b",
-        r"\btienen\s+portafolio\b",
+        r"\b(?:tienen|manejan|cuentan\s+con)\s+(?:un\s+)?(?:catalogo|portafolio)\b",
     )
     return any(re.search(patron, texto_norm) for patron in patrones)
 
@@ -736,6 +740,11 @@ class ModeloNLPVentas:
             tono = "hostil"
             nivel_indecision = 0.90
             escalamiento_humano = True
+            confianza_reglas = 1.0
+        elif es_pregunta_cat and not cotizacion_explicita:
+            intencion = "consulta_servicio"
+            tono = "interesado"
+            nivel_indecision = 0.20
             confianza_reglas = 1.0
         elif parametros_pendientes:
             intencion = "solicitud_cotizacion"
