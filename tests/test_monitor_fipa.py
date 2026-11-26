@@ -198,3 +198,33 @@ def test_enviar_fipa_registra_solo_despues_de_send_exitoso() -> None:
         assert len(monitor.historial_mensajes) == 1
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    ("predicado", "esperado"),
+    [
+        ("(motivo: parametros_incompletos)", "motivo=parametros_incompletos"),
+        ("(motivo: horario_ocupado)", "motivo=horario_ocupado"),
+        ("(motivo: descuento_no_viable)", "motivo=descuento_no_viable"),
+        ("(motivo: excede_margen_permitido)", "motivo=excede_margen_permitido"),
+        ("(motivo: Juan Perez 573001112233)", "motivo=no_especificado"),
+    ],
+)
+def test_monitor_muestra_motivo_especifico_y_redacta_motivos_no_autorizados(
+    predicado: str,
+    esperado: str,
+) -> None:
+    monitor = MonitorFIPAACL(silencioso=True)
+    mensaje = crear_mensaje_fipa(
+        sender_jid="cotizaciones@localhost",
+        receiver_jid="coordinador@localhost",
+        performative="FAILURE",
+        predicado_contenido=predicado,
+        protocol="FIPA-Request",
+        conversation_id="prueba-motivo",
+    )
+
+    registro = monitor.registrar_mensaje_fipa(mensaje)
+    assert registro["fipa_json"][":content"] == esperado
+    assert "573001112233" not in json.dumps(registro)
+    assert "Juan Perez" not in json.dumps(registro)

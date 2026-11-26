@@ -63,6 +63,26 @@ _ACCIONES_RESUMIBLES = frozenset(
         "transferir_promocion",
     }
 )
+_MOTIVOS_RESUMIBLES = frozenset(
+    {
+        "cotizacion_no_aprobada",
+        "datos_cita_invalidos",
+        "datos_cliente_incompletos",
+        "descuento_no_autorizado",
+        "descuento_no_viable",
+        "descuento_no_viable_sin_cotizacion_o_promocion",
+        "disponibilidad_google_calendar_no_verificada",
+        "excede_margen_permitido",
+        "excede_presupuesto",
+        "fuera_de_alcance_operativo",
+        "google_calendar_disponibilidad_no_verificada",
+        "horario_ocupado",
+        "parametros_incompletos",
+        "persistencia_agendamiento_fallida",
+        "regla_comercial_no_autoriza",
+        "requiere_cotizacion_aprobada",
+    }
+)
 _AGENTES_CONOCIDOS = frozenset(
     {
         "AgenteAgendamientos",
@@ -73,6 +93,10 @@ _AGENTES_CONOCIDOS = frozenset(
     }
 )
 _PATRON_ACCION = re.compile(r"^\s*\(\s*([a-z][a-z0-9_-]*)\b", re.IGNORECASE)
+_PATRON_MOTIVO = re.compile(
+    r"^\s*\(\s*motivo\s*:\s*([a-z][a-z0-9_-]*)\s*\)",
+    re.IGNORECASE,
+)
 
 _COLORES_PERFORMATIVA = {
     "REQUEST": "bold cyan",
@@ -119,10 +143,19 @@ class MonitorFIPAACL:
 
     @staticmethod
     def _resumir_contenido_seguro(contenido: Any) -> str:
-        coincidencia = _PATRON_ACCION.match(str(contenido or ""))
+        texto = str(contenido or "")
+        coincidencia_motivo = _PATRON_MOTIVO.match(texto)
+        if coincidencia_motivo:
+            motivo = coincidencia_motivo.group(1).lower()
+            if motivo in _MOTIVOS_RESUMIBLES:
+                return f"motivo={motivo}"
+            return "motivo=no_especificado"
+        coincidencia = _PATRON_ACCION.match(texto)
         accion = coincidencia.group(1).lower() if coincidencia else ""
         if accion not in _ACCIONES_RESUMIBLES:
             return "accion=mensaje"
+        if accion == "motivo":
+            return "motivo=no_especificado"
         return f"accion={accion}"
 
     def registrar_mensaje_fipa(self, msg: Message) -> Dict[str, Any]:
