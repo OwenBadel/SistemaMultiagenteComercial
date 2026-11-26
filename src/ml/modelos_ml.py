@@ -384,6 +384,27 @@ def _extraer_fecha_hora(
                     + texto_norm[coincidencia.end() :]
                 )
 
+    if fecha_fija is None and dia_semana is None and diferencia_dias is None:
+        match_solo_dia = re.search(
+            r"\b(?:el(?:\s+dia)?|dia)\s+(?P<dia>[12]?\d|3[01])\b",
+            texto_norm,
+        )
+        if match_solo_dia:
+            dia_mes = int(match_solo_dia.group("dia"))
+            if 1 <= dia_mes <= 31:
+                mes_cand = referencia.month
+                anio_cand = referencia.year
+                if dia_mes < referencia.day:
+                    mes_cand = 1 if mes_cand == 12 else mes_cand + 1
+                    if mes_cand == 1:
+                        anio_cand += 1
+                fecha_fija = (dia_mes, mes_cand, anio_cand)
+                texto_con_hora = (
+                    texto_norm[: match_solo_dia.start()]
+                    + " "
+                    + texto_norm[match_solo_dia.end() :]
+                )
+
     hora_explicita = _extraer_hora(texto_con_hora)
     referencia_fecha: Optional[datetime] = None
     if isinstance(fecha_referencia, datetime):
