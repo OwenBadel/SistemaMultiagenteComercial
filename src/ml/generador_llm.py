@@ -34,7 +34,8 @@ _INSTRUCCION_SISTEMA = (
     "3. Nunca menciones tecnicismos internos como 'complejidad 1-5', 'parametros obligatorios', "
     "'FIPA', 'SPADE', 'Random Forest', 'KNN', 'base de datos' ni nombres de variables.\n"
     "4. No uses emojis.\n"
-    "5. Responde directamente al cliente sin preambulos ni comillas envolventes."
+    "5. Responde directamente al cliente sin preambulos ni comillas envolventes.\n"
+    "6. No inventes preguntas sobre requisitos que no figuren en el borrador verificado."
 )
 
 

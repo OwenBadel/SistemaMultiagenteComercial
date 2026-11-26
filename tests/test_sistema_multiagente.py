@@ -3402,3 +3402,146 @@ def test_generador_gemini_redacta_valida_hechos_y_hace_fallback_en_429() -> None
             await servicio.detener()
 
     asyncio.run(_run())
+
+
+def test_cotizacion_fotografia_a_medida_fraccionada_sin_perdida() -> None:
+    """
+    Verifica cotizacion autonoma de servicios fotograficos fuera del catalogo
+    (ej. foto familiar para 4 personas) y paquetes fraccionados (ej. solo 1 foto),
+    protegiendo siempre el margen minimo de rentabilidad en AgenteCoordinador.
+    """
+    from src.reglas_comerciales import calcular_cotizacion_a_medida_fotografia
+
+    una_foto = calcular_cotizacion_a_medida_fotografia(
+        clave_servicio_ref="retrato_corporativo",
+        nombre_paquete_ref="Retrato Corporativo y Marca Personal",
+        tarifa_paquete_ref=320_000,
+        descripcion_paquete_ref="Incluye 8 fotos editadas en alta resolucion en estudio.",
+        descripcion_cliente="Fotografía Individual (1 foto)",
+        margen_base=0.40,
+        margen_minimo=0.25,
+        cantidad_fotos=1,
+        cantidad_personas=1,
+        en_exterior=False,
+    )
+    desg_1 = una_foto["desglose"]
+    assert 100_000 <= una_foto["valor_total"] < 320_000
+    assert desg_1["margen_neto_estimado"] >= 0.25
+    assert una_foto["valor_total"] >= desg_1["piso_minimo_rentable"]
+
+    familiar_4 = calcular_cotizacion_a_medida_fotografia(
+        clave_servicio_ref="retrato_corporativo",
+        nombre_paquete_ref="Retrato Corporativo y Marca Personal",
+        tarifa_paquete_ref=320_000,
+        descripcion_paquete_ref="Incluye 8 fotos editadas en alta resolucion en estudio.",
+        descripcion_cliente="Sesión de Fotografía Familiar",
+        margen_base=0.40,
+        margen_minimo=0.25,
+        cantidad_fotos=8,
+        cantidad_personas=4,
+        en_exterior=False,
+    )
+    assert familiar_4["valor_total"] > una_foto["valor_total"]
+    assert familiar_4["desglose"]["margen_neto_estimado"] >= 0.25
+
+    async def _run() -> None:
+        repo = RepositorioSQLite(ruta_db=":memory:", negocio_id="estudio_fotografia", auto_seed=False)
+        repo._conn.execute(
+            """
+            INSERT INTO negocios (
+                id, nombre_negocio, rubro, moneda, unidad_cantidad, etiqueta_cantidad,
+                etiqueta_complejidad, telefono_dueno, margen_base, margen_minimo,
+                descuento_maximo, mensaje_catalogo_intro
+            ) VALUES (
+                'estudio_fotografia', 'Estudio Visual Independiente',
+                'Fotografia Comercial y Produccion de Video', 'COP', 'sesiones',
+                'sesiones_requeridas', 'complejidad', '573001234567', 0.40, 0.25,
+                12.0, 'Hola! Aqui tienes nuestros paquetes'
+            )
+            """
+        )
+        repo._conn.execute(
+            """
+            INSERT INTO servicios (
+                negocio_id, clave, servicio_id_num, nombre, descripcion, tarifa_unitaria,
+                palabras_clave, requiere_complejidad, costo_adicional_mantenimiento
+            ) VALUES
+                ('estudio_fotografia', 'sesion_producto', 1, 'Fotografia de Producto E-Commerce', 'Incluye 10 fotos editadas en estudio.', 280000, '["producto","ecommerce"]', 1, 150000),
+                ('estudio_fotografia', 'retrato_corporativo', 2, 'Retrato Corporativo y Marca Personal', 'Incluye 8 fotos editadas en estudio.', 320000, '["retrato","corporativo","foto"]', 0, 120000)
+            """
+        )
+        repo._conn.execute(
+            """
+            INSERT INTO tarifas_historicas (
+                negocio_id, id_cotizacion, tipo_servicio, tipo_servicio_id, complejidad,
+                cantidad_unidades, urgencia_dias, incluye_adicional, costo_base, costo_total, margen_estimado
+            ) VALUES
+                ('estudio_fotografia', 'FOT-1', 'retrato_corporativo', 2, 2, 1, 5, 0, 320000, 320000, 0.40),
+                ('estudio_fotografia', 'FOT-2', 'sesion_producto', 1, 3, 2, 7, 0, 560000, 560000, 0.40)
+            """
+        )
+        repo._conn.execute(
+            """
+            INSERT INTO historico_ofertas (
+                negocio_id, id_oferta, monto_cotizado, nivel_indecision, complejidad,
+                fidelidad_cliente, porcentaje_descuento_optimo, cerrado_exitosamente
+            ) VALUES
+                ('estudio_fotografia', 'OFE-1', 320000, 0.7, 2, 1, 8.0, 1),
+                ('estudio_fotografia', 'OFE-2', 560000, 0.8, 3, 2, 10.0, 1)
+            """
+        )
+        repo._conn.commit()
+
+        servicio = ServicioMultiagenteComercial(
+            repositorio=repo,
+            usar_xmpp_embebido=False,
+            silencioso=True,
+        )
+        await servicio.iniciar()
+        try:
+            # 1) Servicio fuera de catalogo: foto familiar para 4 personas
+            res_fam = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_fam_1",
+                nombre_cliente="Camila Diaz",
+                texto="Quiero una foto familiar, somos 4 personas",
+            )
+            assert res_fam["intencion"] == "solicitud_cotizacion"
+            assert res_fam["resultado"]["resultado"] == "cotizacion_entregada"
+            desg_fam = res_fam["resultado"]["desglose"]
+            assert desg_fam["es_personalizado"] is True
+            assert desg_fam["cantidad_personas"] == 4
+            assert desg_fam["margen_neto_estimado"] >= 0.25
+            assert "aprobada_sin_perdida" in desg_fam["validacion_coordinador"]
+
+            # 2) Servicio fraccionado: solo 1 foto de producto (no vende a perdida)
+            res_1foto = await servicio.procesar_mensaje_entrante(
+                canal="Webchat",
+                id_cliente="cli_1foto",
+                nombre_cliente="Luis Perez",
+                texto="De fotografia de producto solo quiero 1 foto",
+            )
+            assert res_1foto["intencion"] == "solicitud_cotizacion"
+            assert res_1foto["resultado"]["resultado"] == "cotizacion_entregada"
+            val_1 = res_1foto["resultado"]["valor_total"]
+            desg_prod = res_1foto["resultado"]["desglose"]
+            assert desg_prod["cantidad_fotos"] == 1
+            assert 90_000 <= val_1 < 280_000
+            assert desg_prod["margen_neto_estimado"] >= 0.25
+
+            # 3) Coordinador ajusta automaticamente si llegara una propuesta por debajo del piso
+            payload_bajo = {
+                "valor_total": 40_000.0,
+                "desglose": {
+                    "costo_operativo_directo": 75_000.0,
+                    "piso_minimo_rentable": 100_000.0,
+                },
+            }
+            validacion = servicio.coordinador.validarPropuestaComercial(payload_bajo)
+            assert validacion["ajustada_por_margen"] is True
+            assert payload_bajo["valor_total"] == 100_000.0
+            assert payload_bajo["desglose"]["margen_neto_estimado"] >= 0.25
+        finally:
+            await servicio.detener()
+
+    asyncio.run(_run())

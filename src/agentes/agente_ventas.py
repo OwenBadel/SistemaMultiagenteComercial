@@ -402,6 +402,7 @@ class AgenteVentas(AgenteBaseMASML):
             tipo_respuesta=tipo_respuesta,
             texto_base=mensaje,
             hechos_obligatorios=hechos_obligatorios,
+            id_cliente=id_cliente,
         )
         self.creencias["historialCharla"].append(
             {"rol": "agente_ventas", "texto": mensaje_final}
@@ -796,6 +797,10 @@ class AgenteVentas(AgenteBaseMASML):
                 "horas_estimadas",
                 "sesiones_requeridas",
                 "cantidad_productos",
+                "cantidad_fotos",
+                "cantidad_personas",
+                "en_exterior",
+                "es_personalizado",
                 "complejidad",
                 "urgencia_dias",
             )
@@ -807,11 +812,24 @@ class AgenteVentas(AgenteBaseMASML):
             or analisis["intencion"] == "solicitud_cotizacion"
             or (esperando_params and tiene_nuevos_params)
         ):
-            params_previos = (
+            params_previos = dict(
                 self.entorno.perfilesClientes.obtener_parametros_cotizacion(
                     id_cliente, contexto_id
                 )
             )
+            if (
+                "tipo_servicio" in parametros_extraidos
+                and not parametros_extraidos.get("es_personalizado")
+                and "cantidad_fotos" not in parametros_extraidos
+            ):
+                for clave_custom in (
+                    "es_personalizado",
+                    "descripcion_personalizada",
+                    "cantidad_fotos",
+                    "cantidad_personas",
+                    "en_exterior",
+                ):
+                    params_previos.pop(clave_custom, None)
             parametros_metadata = {
                 clave: valor
                 for clave, valor in dict(
@@ -1256,7 +1274,29 @@ class AgenteVentas(AgenteBaseMASML):
             valor_total = float(payload.get("valor_total", 0.0))
             desglose = payload.get("desglose", {})
             moneda = str(self.entorno.config_negocio.get("moneda", "COP"))
-            if normalizar_unidad_comercial(
+            if desglose.get("es_personalizado"):
+                cant_fotos = int(desglose.get("cantidad_fotos", 1))
+                cant_personas = int(desglose.get("cantidad_personas", 1))
+                locacion_txt = (
+                    "en locación externa"
+                    if desglose.get("locacion") == "exterior"
+                    else "en nuestro estudio"
+                )
+                fotos_txt = "1 foto editada en alta resolución" if cant_fotos == 1 else f"{cant_fotos} fotos editadas en alta resolución"
+                personas_txt = f" para {cant_personas} personas" if cant_personas > 1 else ""
+                nota_paquete = ""
+                if desglose.get("conveniencia_paquete_completo"):
+                    fotos_ref = int(desglose.get("fotos_paquete_referencia", cant_fotos))
+                    nota_paquete = (
+                        f" Por ese mismo valor puedes llevar el paquete completo de {fotos_ref} fotos editadas."
+                    )
+                texto_cot = (
+                    f"Para tu {desglose.get('servicio', 'servicio fotográfico a medida')}{personas_txt} "
+                    f"({fotos_txt}, {locacion_txt}, con alistamiento de equipo, iluminación y retoque profesional), "
+                    f"la cotización formal es de ${valor_total:,.0f} {moneda}.{nota_paquete} "
+                    "¿Te gustaría agendar una cita para esta sesión o ajustar la cantidad de fotos o modalidad (estudio/exterior)?"
+                )
+            elif normalizar_unidad_comercial(
                 desglose.get("unidad_cantidad", "")
             ) == "sesion":
                 cantidad = int(desglose.get("cantidad_unidades", 0))
@@ -1292,15 +1332,20 @@ class AgenteVentas(AgenteBaseMASML):
                     f"Ajuste por alcance/urgencia: ${ajuste:,.0f} {moneda}). "
                     "¿Te gustaría agendar una cita para iniciar?"
                 )
+            hechos_cot = (
+                [f"${valor_total:,.0f}"]
+                if desglose.get("es_personalizado")
+                else [
+                    str(desglose.get("servicio", "")),
+                    f"${valor_total:,.0f}",
+                ]
+            )
             res = self.responderLenguajeNatural(
                 "cotizacion_formal",
                 canal,
                 id_cliente,
                 texto_cot,
-                hechos_obligatorios=[
-                    str(desglose.get("servicio", "")),
-                    f"${valor_total:,.0f}",
-                ],
+                hechos_obligatorios=hechos_cot,
             )
             self.marcar_ciclo_completado(
                 {"resultado": "cotizacion_entregada", "valor_total": valor_total, "desglose": desglose, "envio": res}

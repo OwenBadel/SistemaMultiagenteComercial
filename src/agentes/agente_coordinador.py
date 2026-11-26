@@ -131,13 +131,49 @@ class AgenteCoordinador(AgenteBaseMASML):
         return {"viable": viable, "motivo": motivo}
 
     def validarPropuestaComercial(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Valida la propuesta comercial liquidada antes de autorizar su entrega."""
+        """
+        Valida la propuesta comercial liquidada y protege el margen minimo de
+        factibilidad configurado en BD antes de autorizar su entrega al cliente.
+        """
         valor_total = float(payload.get("valor_total", 0.0))
-        self.registrar_accion(
-            "validarPropuestaComercial()",
-            f"valor_total={valor_total:,.0f}",
-        )
-        return {"valida": valor_total >= 0.0, "valor_total": valor_total}
+        desglose = payload.get("desglose")
+        margen_minimo = float(self.entorno.config_negocio.get("margen_minimo", 0.25))
+        ajustada = False
+        margen_neto = None
+
+        if isinstance(desglose, dict):
+            costo_op = float(desglose.get("costo_operativo_directo") or 0.0)
+            piso_rentable = float(desglose.get("piso_minimo_rentable") or 0.0)
+            if costo_op > 0:
+                if piso_rentable <= 0:
+                    piso_rentable = round(costo_op / max(0.05, 1.0 - margen_minimo), -3)
+                if valor_total < piso_rentable:
+                    valor_total = piso_rentable
+                    payload["valor_total"] = valor_total
+                    desglose["ajustado_por_margen_minimo"] = True
+                    ajustada = True
+                margen_neto = (
+                    round((valor_total - costo_op) / valor_total, 4)
+                    if valor_total > 0
+                    else 0.0
+                )
+                desglose["margen_neto_estimado"] = margen_neto
+                desglose["validacion_coordinador"] = (
+                    f"aprobada_sin_perdida (margen={margen_neto * 100:.1f}% >= min={margen_minimo * 100:.0f}%)"
+                )
+
+        detalle = f"valor_total={valor_total:,.0f}"
+        if margen_neto is not None:
+            detalle += f" | margen={margen_neto * 100:.1f}% >= min={margen_minimo * 100:.0f}% | anti_perdida=OK"
+            if ajustada:
+                detalle += " (ajustado_al_piso_rentable)"
+        self.registrar_accion("validarPropuestaComercial()", detalle)
+        return {
+            "valida": valor_total >= 0.0,
+            "valor_total": valor_total,
+            "margen_neto": margen_neto,
+            "ajustada_por_margen": ajustada,
+        }
 
     def cerrarOportunidadVenta(
         self,

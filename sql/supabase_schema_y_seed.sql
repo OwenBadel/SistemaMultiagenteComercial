@@ -233,11 +233,14 @@ INSERT INTO servicios (
     negocio_id, clave, servicio_id_num, nombre, descripcion, tarifa_unitaria,
     palabras_clave, requiere_complejidad, costo_adicional_mantenimiento
 ) VALUES
-    ('estudio_fotografia', 'sesion_producto', 1, 'Fotografia de Producto E-Commerce', 'Iluminacion en estudio, fondo limpio y retoque editorial.', 280000, '["producto","catalogo","catálogo","articulo","ecommerce"]'::jsonb, TRUE, 150000),
-    ('estudio_fotografia', 'retrato_corporativo', 2, 'Retrato Corporativo y Marca Personal', 'Sesion profesional en estudio o locacion con entrega digital.', 320000, '["retrato","corporativo","perfil","marca personal","foto"]'::jsonb, FALSE, 120000),
-    ('estudio_fotografia', 'cobertura_evento', 3, 'Cobertura Fotografica de Eventos', 'Registro completo en locacion con edicion de galeria.', 450000, '["evento","boda","grado","conferencia","fiesta"]'::jsonb, TRUE, 200000),
-    ('estudio_fotografia', 'video_reel', 4, 'Produccion de Video Reels / Comercial Corto', 'Grabacion 4K, edicion dinamica y colorizacion para redes.', 390000, '["video","reel","reels","comercial","grabacion"]'::jsonb, TRUE, 180000)
-ON CONFLICT (negocio_id, clave) DO NOTHING;
+    ('estudio_fotografia', 'sesion_producto', 1, 'Fotografia de Producto E-Commerce', 'Incluye 10 fotos editadas en alta resolucion en estudio, iluminacion profesional y fondo limpio.', 280000, '["producto","catalogo","catálogo","articulo","ecommerce"]'::jsonb, TRUE, 150000),
+    ('estudio_fotografia', 'retrato_corporativo', 2, 'Retrato Corporativo y Marca Personal', 'Incluye 8 fotos editadas en alta resolucion en estudio (hasta 2 personas) con retoque profesional.', 320000, '["retrato","corporativo","perfil","marca personal","foto"]'::jsonb, FALSE, 120000),
+    ('estudio_fotografia', 'cobertura_evento', 3, 'Cobertura Fotografica de Eventos', 'Incluye 30 fotos editadas en galeria digital (2 a 3 horas en locacion).', 450000, '["evento","boda","grado","conferencia","fiesta"]'::jsonb, TRUE, 200000),
+    ('estudio_fotografia', 'video_reel', 4, 'Produccion de Video Reels / Comercial Corto', 'Incluye 2 reels 4K editados, colorizacion y musica para redes sociales.', 390000, '["video","reel","reels","comercial","grabacion"]'::jsonb, TRUE, 180000)
+ON CONFLICT (negocio_id, clave) DO UPDATE SET
+    descripcion = EXCLUDED.descripcion,
+    tarifa_unitaria = EXCLUDED.tarifa_unitaria,
+    palabras_clave = EXCLUDED.palabras_clave;
 
 INSERT INTO promociones_vigentes (negocio_id, codigo, descripcion, descuento_max, activa, condiciones) VALUES
     (

@@ -22,6 +22,7 @@ from src.ml.modelos_ml import (
     rango_complejidad_servicio,
 )
 from src.organizacion.organizacion_comercial import SistemaMultiagenteComercial
+from src.reglas_comerciales import calcular_cotizacion_a_medida_fotografia
 
 
 @dataclass
@@ -122,6 +123,8 @@ class AgenteCotizaciones(AgenteBaseMASML):
         requiere_comp = True
         if tipo and str(tipo) in catalogo:
             requiere_comp = bool(catalogo[str(tipo)].get("requiere_complejidad", True))
+        if parametros.get("es_personalizado") or parametros.get("cantidad_fotos") is not None:
+            requiere_comp = False
 
         complejidad = self._entero_no_negativo(parametros.get("complejidad"))
         rango = rango_complejidad_servicio(
@@ -261,6 +264,45 @@ class AgenteCotizaciones(AgenteBaseMASML):
                 raise ValueError(
                     f"El servicio '{tipo_servicio}' no tiene una tarifa unitaria configurada."
                 )
+            if parametros_servicio.get("es_personalizado") or parametros_servicio.get("cantidad_fotos") is not None:
+                cfg = self.entorno.config_negocio
+                prediccion = calcular_cotizacion_a_medida_fotografia(
+                    clave_servicio_ref=tipo_servicio,
+                    nombre_paquete_ref=str(meta.get("nombre", tipo_servicio)),
+                    tarifa_paquete_ref=float(tarifa_unitaria),
+                    descripcion_paquete_ref=str(meta.get("descripcion", "")),
+                    descripcion_cliente=str(
+                        parametros_servicio.get("descripcion_personalizada")
+                        or meta.get("nombre", tipo_servicio)
+                    ),
+                    margen_base=float(cfg.get("margen_base", 0.40)),
+                    margen_minimo=float(cfg.get("margen_minimo", 0.25)),
+                    cantidad_fotos=self._entero_positivo(
+                        parametros_servicio.get("cantidad_fotos")
+                    ),
+                    cantidad_personas=self._entero_positivo(
+                        parametros_servicio.get("cantidad_personas")
+                    ),
+                    en_exterior=bool(parametros_servicio.get("en_exterior", False)),
+                    cantidad_sesiones=cantidad,
+                    urgencia_dias=self._entero_positivo(
+                        parametros_servicio.get("urgencia_dias")
+                    ),
+                    moneda=moneda,
+                )
+                desg = prediccion["desglose"]
+                self.registrar_accion(
+                    "ejecutarCalculoCostos()",
+                    (
+                        f"Cotizacion a medida anti-perdida ({desg['servicio']}) -> "
+                        f"${prediccion['valor_total']:,.0f} {moneda} | "
+                        f"fotos={desg['cantidad_fotos']}, personas={desg['cantidad_personas']}, "
+                        f"locacion={desg['locacion']}, costo_op=${desg['costo_operativo_directo']:,.0f}, "
+                        f"margen={desg['margen_neto_estimado']*100:.1f}%"
+                    ),
+                )
+                return prediccion
+
             tarifa = float(tarifa_unitaria)
             valor_total = float(tarifa * cantidad)
             complejidad = self._entero_no_negativo(

@@ -321,12 +321,23 @@ class ServicioMultiagenteComercial:
                 if conversation_id
                 else perfil_previo.get("ultima_cotizacion")
             )
-            texto_afirmativo = bool(
-                re.search(
-                    r"\b(?:s[ií]|claro|perfecto|de acuerdo|hag[aá]moslo|por favor)\b",
-                    texto.casefold(),
+            texto_cf = texto.casefold()
+            es_pregunta_o_ajuste = (
+                "?" in texto_cf
+                or bool(
+                    re.search(
+                        r"\b(?:y\s+si|si\s+es|si\s+son|si\s+somos|exterior|exteriores|estudio|fotos?|personas?|cu[aá]nto|cotiz|precio)\b",
+                        texto_cf,
+                    )
                 )
-                and not re.search(r"\bno\b", texto.casefold())
+            )
+            texto_afirmativo = bool(
+                not es_pregunta_o_ajuste
+                and re.search(
+                    r"\b(?:s[ií]|claro|perfecto|de acuerdo|hag[aá]moslo|por favor)\b",
+                    texto_cf,
+                )
+                and not re.search(r"\bno\b", texto_cf)
             )
             if (
                 cotizacion_actual is not None

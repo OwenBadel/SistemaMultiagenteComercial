@@ -644,28 +644,34 @@ class ModeloNLPVentas:
             contexto_tipo == "parametros_servicio"
             or "cotiz" in texto_norm
             or "presupuesto" in texto_norm
+            or bool(parametros.get("es_personalizado"))
             or (
-            any(
-                k in parametros
-                for k in (
-                    "tipo_servicio",
-                    "cantidad_unidades",
-                    "horas_estimadas",
-                    "sesiones_requeridas",
-                    "cantidad_productos",
-                    "complejidad",
-                    "fuera_de_alcance",
+                parametros.get("cantidad_fotos") is not None
+                and normalizar_unidad_comercial(self.unidad_cantidad) == "sesion"
+            )
+            or (
+                any(
+                    k in parametros
+                    for k in (
+                        "tipo_servicio",
+                        "cantidad_unidades",
+                        "horas_estimadas",
+                        "sesiones_requeridas",
+                        "cantidad_productos",
+                        "complejidad",
+                        "fuera_de_alcance",
+                    )
+                )
+                and any(
+                    w in texto_norm
+                    for w in (
+                        "cotiz", "precio", "cuesta", "vale", "presupuesto",
+                        "servicio", "hora", "sesion", "unidad", "fotografia",
+                        "foto", "fotos", "producto", "complejidad", "cuanto",
+                    )
                 )
             )
-            and any(
-                w in texto_norm
-                for w in (
-                    "cotiz", "precio", "cuesta", "vale", "presupuesto",
-                    "servicio", "hora", "sesion", "unidad", "fotografia",
-                    "producto", "complejidad", "cuanto",
-                )
-            )
-        )):
+        ):
             intencion = "solicitud_cotizacion"
             tono = "interesado"
             nivel_indecision = 0.20
@@ -922,6 +928,136 @@ class ModeloNLPVentas:
             )
             if cantidad_productos is not None and cantidad_productos > 0:
                 params["cantidad_productos"] = cantidad_productos
+
+        # 2b. Extraccion especializada para servicios fotograficos a medida o fraccionados
+        if normalizar_unidad_comercial(self.unidad_cantidad) == "sesion":
+            servicios_personalizados_foto = (
+                (("familiar", "familia", "familiares"), "retrato_corporativo", "Sesión de Fotografía Familiar", False),
+                (("pareja", "novios", "preboda", "aniversario"), "retrato_corporativo", "Sesión de Fotografía de Pareja", False),
+                (("maternidad", "embarazo", "premama", "bebe", "newborn", "recien nacido"), "retrato_corporativo", "Sesión de Fotografía de Maternidad / Bebé", False),
+                (("personal", "individual", "hoja de vida", "linkedin", "pasaporte", "documento"), "retrato_corporativo", "Sesión de Fotografía Personal", False),
+                (("mascota", "mascotas", "perro", "gato"), "retrato_corporativo", "Sesión de Fotografía de Mascotas", False),
+                (("quince", "15 anos", "xv anos", "bautizo", "comunion", "cumpleanos", "graduacion", "matrimonio"), "cobertura_evento", "Cobertura Fotográfica Social Personalizada", True),
+                (("gastronomia", "comida", "alimentos", "platos", "restaurante", "menu"), "sesion_producto", "Fotografía Gastronómica / Menú", False),
+                (("inmueble", "apartamento", "arquitectura", "airbnb", "propiedad"), "sesion_producto", "Fotografía Arquitectónica / Inmuebles", True),
+                (("moda", "lookbook", "editorial", "prendas", "ropa"), "sesion_producto", "Fotografía de Moda / Lookbook", False),
+            )
+            es_pregunta_catalogo = any(
+                _contiene_termino(texto_norm, p)
+                for p in ("que servicios", "que paquetes", "que planes", "catalogo", "portafolio", "que ofrecen", "que tienen")
+            )
+            if not es_pregunta_catalogo:
+                # Detectar cantidad exacta de fotos (ej. "solo 1 foto", "una sola foto", "5 fotos", "1 foto")
+                match_fotos = re.search(
+                    rf"(?<!\w)(?P<restriccion>(?:solo|unicamente|nada\s+mas|apenas)\s+)?"
+                    rf"(?P<cantidad>\d+|{numeros_regex})"
+                    rf"(?P<sufijo>\s+sol[oa]s?|\s+unic[oa]s?)?\s+"
+                    rf"(?:fotos?|fotografias?)(?!\w)",
+                    texto_norm,
+                )
+                if match_fotos:
+                    cant_fotos = _numero_espanol_a_entero(match_fotos.group("cantidad"))
+                    raw_cant = match_fotos.group("cantidad")
+                    es_uno_implicito = raw_cant in {"un", "una"} and not match_fotos.group("restriccion") and not match_fotos.group("sufijo")
+                    # Si dice "una foto familiar", suele ser sesion familiar (8 fotos), salvo que diga "solo una foto" o "1 foto"
+                    tiene_tipo_custom = any(
+                        _contiene_termino(texto_norm, kw)
+                        for kws, _, _, _ in servicios_personalizados_foto
+                        for kw in kws
+                    )
+                    if cant_fotos is not None and cant_fotos > 0 and (not es_uno_implicito or not tiene_tipo_custom):
+                        params["cantidad_fotos"] = cant_fotos
+                        params["es_personalizado"] = True
+
+                # Detectar numero de personas (ej. "somos 4 personas", "somos 3", "para 5 personas")
+                match_personas = re.search(
+                    rf"(?<!\w)(?:somos|para|familia\s+de|grupo\s+de)\s+"
+                    rf"(?P<personas>\d+|{numeros_regex})"
+                    rf"(?:\s+(?:personas?|integrantes?|miembros?|adultos?))?"
+                    rf"(?!\s*(?:horas?|sesiones?|dias?|fotos?|fotografias?|productos?|unidades?|pm|am|de\s+la))",
+                    texto_norm,
+                )
+                if match_personas is None:
+                    match_personas = re.search(
+                        rf"(?<!\w)(?P<personas>\d+|{numeros_regex})\s+"
+                        rf"(?:personas?|integrantes?|miembros?)(?!\w)",
+                        texto_norm,
+                    )
+                if match_personas:
+                    cant_personas = _numero_espanol_a_entero(match_personas.group("personas"))
+                    if cant_personas is not None and cant_personas > 0:
+                        params["cantidad_personas"] = cant_personas
+                elif _contiene_termino(texto_norm, "pareja") or _contiene_termino(texto_norm, "novios"):
+                    params["cantidad_personas"] = 2
+
+                # Detectar locacion exterior vs estudio
+                if any(
+                    _contiene_termino(texto_norm, loc)
+                    for loc in ("exterior", "exteriores", "aire libre", "parque", "playa", "domicilio", "fuera del estudio", "locacion externa", "mi casa")
+                ):
+                    params["en_exterior"] = True
+                elif any(
+                    _contiene_termino(texto_norm, loc)
+                    for loc in ("en estudio", "en el estudio", "tu estudio", "su estudio")
+                ):
+                    params["en_exterior"] = False
+
+                # Detectar servicio fotografico fuera del catalogo estandar
+                for keywords, clave_ref, nombre_custom, default_exterior in servicios_personalizados_foto:
+                    if any(_contiene_termino(texto_norm, kw) for kw in keywords):
+                        clave_elegida = (
+                            clave_ref
+                            if clave_ref in self.catalogo_servicios
+                            else next(iter(self.catalogo_servicios.keys()), clave_ref)
+                        )
+                        params["tipo_servicio"] = clave_elegida
+                        meta_servicio_seleccionado = self.catalogo_servicios.get(clave_elegida, {})
+                        params["es_personalizado"] = True
+                        params["descripcion_personalizada"] = nombre_custom
+                        if "en_exterior" not in params and default_exterior:
+                            params["en_exterior"] = True
+                        break
+
+                # Si refina una cotizacion personalizada previa o pregunta por modalidad/personas
+                acum = parametros_acumulados or {}
+                if not params.get("es_personalizado") and (
+                    "cantidad_personas" in params
+                    or "en_exterior" in params
+                    or "cantidad_fotos" in params
+                ):
+                    params["es_personalizado"] = True
+                    if "tipo_servicio" not in params and acum.get("tipo_servicio"):
+                        params["tipo_servicio"] = acum["tipo_servicio"]
+                        meta_servicio_seleccionado = self.catalogo_servicios.get(
+                            str(params["tipo_servicio"]), {}
+                        )
+                    if "descripcion_personalizada" not in params and acum.get("descripcion_personalizada"):
+                        params["descripcion_personalizada"] = acum["descripcion_personalizada"]
+
+                # Si pidio fotos fraccionadas (ej. "solo 1 foto" o "5 fotos de producto")
+                if params.get("es_personalizado"):
+                    if "tipo_servicio" not in params:
+                        clave_default = (
+                            "retrato_corporativo"
+                            if "retrato_corporativo" in self.catalogo_servicios
+                            else next(iter(self.catalogo_servicios.keys()), "retrato_corporativo")
+                        )
+                        params["tipo_servicio"] = clave_default
+                        meta_servicio_seleccionado = self.catalogo_servicios.get(clave_default, {})
+                    if "descripcion_personalizada" not in params:
+                        nombre_base = str(meta_servicio_seleccionado.get("nombre", "Fotografía"))
+                        cant_f = params.get("cantidad_fotos")
+                        if cant_f == 1:
+                            params["descripcion_personalizada"] = f"Fotografía Individual a Medida (1 foto - base {nombre_base})"
+                        elif cant_f:
+                            params["descripcion_personalizada"] = f"Paquete a Medida ({cant_f} fotos - base {nombre_base})"
+                        else:
+                            params["descripcion_personalizada"] = f"Servicio a Medida ({nombre_base})"
+                    if "cantidad_unidades" not in params:
+                        campo_u = self._etiqueta_cantidad(meta_servicio_seleccionado, unidad_configurada)
+                        params["cantidad_unidades"] = 1
+                        params["unidad_cantidad"] = unidad_configurada
+                        params[campo_u] = 1
 
         numero_complejidad_regex = "|".join(
             sorted(_NUMEROS_ES, key=len, reverse=True)
