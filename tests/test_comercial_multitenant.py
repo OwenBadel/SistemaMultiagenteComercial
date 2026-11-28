@@ -666,3 +666,99 @@ def test_paridad_repositorio_supabase_con_mock_httpx() -> None:
 
     # 5. cancelar_agendamiento con ID no-UUID retorna False sin lanzar 500
     assert repo.cancelar_agendamiento("n1", "no-es-un-uuid") is False
+
+
+def test_mile_cuentas_beauty_reglas_cotizacion_y_jornada_dividida() -> None:
+    repo = RepositorioComercialSQLite(":memory:")
+    cfg = _config_prueba()
+    neg = repo.obtener_negocio("mile_cuentas_beauty")
+    assert neg is not None
+    assert neg["telefono_dueno"] == "573006900581"
+
+    perfil = repo.obtener_o_crear_perfil("mile_cuentas_beauty", "573001112233", "Sofia Vargas")
+    ctx = ContextoHerramientasNegocio(repo, neg, perfil, "WhatsApp", cfg)
+
+    # 1. Catalogo exacto de 7 servicios
+    cat = ctx.consultar_servicios()
+    precios = {s["clave"]: s["precio"] for s in cat["servicios"]}
+    assert precios == {
+        "manicura_semipermanente": 35000.0,
+        "kapping_gel": 45000.0,
+        "dual_gel_premium": 60000.0,
+        "soft_gel_premium": 70000.0,
+        "pedi_spa_essential": 25000.0,
+        "pedi_spa_care": 37000.0,
+        "pedi_spa_luxury": 50000.0,
+    }
+
+    # 2. No permite combinar 2 servicios de manos en la misma cita
+    err_combo = ctx.calcular_cotizacion(
+        [
+            {"servicio_clave": "manicura_semipermanente", "cantidad": 1},
+            {"servicio_clave": "kapping_gel", "cantidad": 1},
+        ]
+    )
+    assert "error" in err_combo
+
+    # 3. Combinar 1 manos + 1 pies + diseno complejo + domicilio + tarjeta (+5%) + anticipo 20%
+    cot = ctx.calcular_cotizacion(
+        [
+            {"servicio_clave": "manicura_semipermanente", "cantidad": 1},
+            {"servicio_clave": "pedi_spa_care", "cantidad": 1},
+        ],
+        diseno_complejo=True,
+        incluir_domicilio_base=True,
+        pago_con_tarjeta=True,
+    )
+    # 35.000 + 37.000 + 25.000 + 15.000 = 112.000; +5% tarjeta = 5.600 -> 117.600; 20% anticipo = 23.520
+    assert cot["subtotal"] == 112000.0
+    assert cot["recargo_tarjeta_valor"] == 5600.0
+    assert cot["total"] == 117600.0
+    assert cot["anticipo_valor"] == 23520.0
+
+    # 4. Reserva maxima de 1 dia de anticipacion: pasado manana rechazado
+    pasado_manana = (date.today() + timedelta(days=2)).isoformat()
+    disp_lejos = ctx.consultar_horarios_disponibles(pasado_manana, 60)
+    assert disp_lejos["disponible"] is False
+
+    # 5. Manana: jornada dividida (12:00-14:00 excluido), estado inicial pendiente y buffer de 15 min
+    manana = (date.today() + timedelta(days=1)).isoformat()
+    disp_manana = ctx.consultar_horarios_disponibles(manana, 60)
+    assert disp_manana["dia_laboral"] is True
+    assert not any(" 12:" in b or " 13:" in b for b in disp_manana["bloques_disponibles"])
+
+    cita_almuerzo = ctx.agendar_cita(
+        fecha_hora=f"{manana} 12:30",
+        servicio_clave="manicura_semipermanente",
+        nombre_cliente="Sofia Vargas",
+        telefono_cliente="573001112233",
+    )
+    assert cita_almuerzo["confirmada"] is False
+    assert "descanso" in cita_almuerzo["error"]
+
+    cita_ok = ctx.agendar_cita(
+        fecha_hora=f"{manana} 09:00",
+        servicio_clave="manicura_semipermanente",
+        nombre_cliente="Sofia Vargas",
+        telefono_cliente="573001112233",
+    )
+    assert cita_ok["estado_cita"] == "pendiente"
+    assert cita_ok["requiere_confirmacion_manual_pago"] is True
+    assert cita_ok["anticipo_porcentaje"] == 20.0
+
+    # 10:00 rechazada por buffer de 15 min; 10:15 aceptada
+    cita_sin_buffer = ctx.agendar_cita(
+        fecha_hora=f"{manana} 10:00",
+        servicio_clave="pedi_spa_essential",
+        nombre_cliente="Laura Ortiz",
+        telefono_cliente="573009998877",
+    )
+    assert "error" in cita_sin_buffer
+
+    cita_con_buffer = ctx.agendar_cita(
+        fecha_hora=f"{manana} 10:15",
+        servicio_clave="pedi_spa_essential",
+        nombre_cliente="Laura Ortiz",
+        telefono_cliente="573009998877",
+    )
+    assert cita_con_buffer["estado_cita"] == "pendiente"

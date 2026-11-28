@@ -143,6 +143,9 @@ def _declaraciones_herramientas() -> Any:
                                 },
                             },
                             "aplicar_promocion": {"type": "boolean"},
+                            "diseno_complejo": {"type": "boolean", "description": "True si la clienta pidio diseno elaborado/complejo con costo adicional."},
+                            "incluir_domicilio_base": {"type": "boolean", "description": "True si la clienta pidio servicio a domicilio."},
+                            "pago_con_tarjeta": {"type": "boolean", "description": "True si la clienta eligio pagar con tarjeta de credito."},
                         },
                         "required": ["items"],
                     },
@@ -238,8 +241,9 @@ def _construir_instruccion_sistema(negocio: Dict[str, Any]) -> str:
     dia_semana = dias_es[ahora.weekday()]
     reglas = negocio.get("reglas_y_faq") or {}
     horario = negocio.get("horario_laboral") or {}
+    instrucciones_extra = str(reglas.get("instrucciones_adicionales") or "").strip()
 
-    return (
+    base = (
         f"Eres el asistente comercial oficial de '{negocio['nombre_negocio']}' "
         f"(rubro: {negocio['rubro']}, moneda: {negocio['moneda']}).\n"
         f"Fecha y hora actual del negocio: {dia_semana} {ahora.strftime('%Y-%m-%d %H:%M')} ({tz_nombre}).\n"
@@ -257,6 +261,9 @@ def _construir_instruccion_sistema(negocio: Dict[str, Any]) -> str:
         "4. CERO INVENCION: si el cliente pregunta CUALQUIER dato que NO figure en esta ficha ni en las herramientas (o si esta molesto, reclama o pide hablar con una persona/dueno), DEBES llamar inmediatamente a `escalar_a_humano` y avisarle con amabilidad que ya pasaste su consulta al asesor humano.\n"
         "5. Se conciso (maximo 4-5 lineas o lista breve), escribe en espanol natural, sin emojis ni jerga tecnica (nunca menciones 'base de datos', 'herramientas', 'JSON', 'API' ni 'Gemini')."
     )
+    if instrucciones_extra:
+        base += f"\n\nREGLAS ESPECIFICAS DE ESTE NEGOCIO:\n{instrucciones_extra}"
+    return base
 
 
 class OrquestadorComercialGemini:

@@ -107,12 +107,32 @@ def validar_horario_laboral(horario: Dict[str, Any]) -> Dict[str, Any]:
     if not 15 <= duracion <= 720:
         raise ValueError("duracion_min debe estar entre 15 y 720 minutos.")
 
-    return {
+    resultado: Dict[str, Any] = {
         "dias": dias,
         "inicio": f"{min_ini // 60:02d}:{min_ini % 60:02d}",
         "fin": f"{min_fin // 60:02d}:{min_fin % 60:02d}",
         "duracion_min": duracion,
     }
+
+    pausas_limpias: List[List[str]] = []
+    for tramo in horario.get("pausas") or []:
+        if isinstance(tramo, (list, tuple)) and len(tramo) == 2:
+            p_ini = _minutos_hhmm(str(tramo[0]))
+            p_fin = _minutos_hhmm(str(tramo[1]))
+            if p_ini is not None and p_fin is not None and p_fin > p_ini:
+                pausas_limpias.append([f"{p_ini // 60:02d}:{p_ini % 60:02d}", f"{p_fin // 60:02d}:{p_fin % 60:02d}"])
+    if pausas_limpias:
+        resultado["pausas"] = pausas_limpias
+
+    if horario.get("buffer_minutos") is not None:
+        buf = max(0, min(120, int(horario["buffer_minutos"])))
+        if buf > 0:
+            resultado["buffer_minutos"] = buf
+
+    if horario.get("max_dias_anticipacion") is not None:
+        resultado["max_dias_anticipacion"] = max(0, int(horario["max_dias_anticipacion"]))
+
+    return resultado
 
 
 def _es_uuid_valido(valor: str) -> bool:
@@ -349,6 +369,74 @@ def _semillas_negocios() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Li
             },
             "pin_dueno_hash": hashear_pin("1234"),
         },
+        {
+            "id": "mile_cuentas_beauty",
+            "nombre_negocio": "Mile Cuentas Beauty",
+            "rubro": "Servicios de Manicura y Pedicura",
+            "moneda": "COP",
+            "unidad_cantidad": "servicios",
+            "etiqueta_cantidad": "cantidad_servicios",
+            "etiqueta_complejidad": "diseno",
+            "telefono_dueno": "573006900581",
+            "whatsapp_negocio": "573006900581",
+            "whatsapp_phone_number_id": "",
+            "whatsapp_access_token": "",
+            "botpress_bot_id": "",
+            "google_calendar_id": "",
+            "zona_horaria": "America/Bogota",
+            "margen_base": 0.45,
+            "margen_minimo": 0.45,
+            "descuento_maximo": 0.0,
+            "mensaje_catalogo_intro": "Con gusto te comparto nuestros servicios de manicura y pedicura",
+            "activo": True,
+            "horario_laboral": {
+                "dias": [1, 2, 3, 4, 5, 6, 7],
+                "inicio": "08:00",
+                "fin": "17:00",
+                "duracion_min": 60,
+                "pausas": [["12:00", "14:00"]],
+                "buffer_minutos": 15,
+                "max_dias_anticipacion": 1,
+            },
+            "reglas_y_faq": {
+                "propietaria": "Mileidis Cuentas",
+                "ciudad": "Cartagena, Colombia",
+                "instagram": "@milecuentas_beauty",
+                "tono_marca": "Muy calido, cercano, femenino, elegante, natural y servicial. Puedes usar expresiones como 'reina', 'mi amor' y 'bella' con naturalidad y sin repetirlas en exceso.",
+                "direccion": "No se comparte automaticamente. La propietaria envia la ubicacion exacta el dia de la cita.",
+                "metodos_pago": "Nequi (llave Bre-B 300 690 0581, titular Mileidis Cuentas), efectivo y tarjetas de credito (recargo del 5% por pago con tarjeta). Enviar comprobante al WhatsApp 300 690 0581.",
+                "politicas": (
+                    "Atencion en local y a domicilio (domicilio desde $15.000 COP segun distancia). "
+                    "Una clienta por cita. Solo se permite combinar 1 servicio de manos y 1 de pies por reserva. "
+                    "Reserva con maximo 1 dia de anticipacion. Anticipo obligatorio del 20% (en diciembre, 1 hora para enviarlo). "
+                    "La cita queda PENDIENTE hasta que la propietaria verifique manualmente el pago. "
+                    "Cancelaciones o inasistencia pierden el anticipo. Reprogramaciones minimo 24 horas antes. "
+                    "Tolerancia maxima de llegada tarde: 15 minutos."
+                ),
+                "reglas_cotizacion": {
+                    "una_por_categoria": ["manos", "pies"],
+                    "costo_diseno_complejo": 25000.0,
+                    "costo_domicilio_minimo": 15000.0,
+                    "anticipo_porcentaje": 20.0,
+                    "recargo_tarjeta_pct": 5.0,
+                    "requiere_confirmacion_manual_pago": True,
+                },
+                "instrucciones_adicionales": (
+                    "1. NO envies el catalogo automaticamente al iniciar la conversacion; compartelo solo cuando la clienta lo necesite y SIN listar precios en el catalogo general (comunica precios de forma conversacional al cotizar o cuando pregunten).\n"
+                    "2. Pregunta si desea atencion en el local o a domicilio (si es domicilio, pide sector/ubicacion e informa que el domicilio parte desde $15.000 COP segun distancia). Pregunta tambien si desea diseno simple (incluido) o diseno complejo (+$25.000 COP, pide foto de referencia) y si requiere retiro de trabajo anterior (20 a 60 min extra y hasta $20.000 COP, requiere valoracion humana con foto).\n"
+                    "3. Nunca confirmes una cita como definitiva: al agendar indica el valor del anticipo del 20%, los datos de pago (Bre-B / Nequi 300 690 0581 a nombre de Mileidis Cuentas) y aclara que la cita queda pendiente hasta que la propietaria verifique el pago.\n"
+                    "4. Si preguntan por servicios de cabello (hidratacion capilar, blower, keratinas, tintes) o cualquier servicio fuera de manicura/pedicura, NO cotices ni agendes: responde con calidez que la propietaria le dara esa informacion y llama a `escalar_a_humano`.\n"
+                    "5. Escala tambien a `escalar_a_humano` si no es claro si el diseno es simple o complejo, si requiere valorar retiro, si pide excepcion a politicas (anticipo/cancelacion/reprogramacion/llegada tarde) o si hay queja."
+                ),
+                "preguntas_frecuentes": [
+                    {"pregunta": "Donde estan ubicados?", "respuesta": "Estamos en Cartagena. Por privacidad, Mileidis te envia la ubicacion exacta el dia de tu cita."},
+                    {"pregunta": "Tienen servicio a domicilio?", "respuesta": "Si, ofrecemos domicilio para todos los servicios desde $15.000 COP segun la distancia."},
+                    {"pregunta": "El diseno tiene costo adicional?", "respuesta": "Los diseños simples del portafolio estan incluidos en el precio base. Los diseños complejos (dibujos elaborados en todas las uñas) tienen un adicional de $25.000 COP."},
+                    {"pregunta": "Que pasa si tengo trabajo anterior para retirar?", "respuesta": "El retiro toma entre 20 y 60 minutos adicionales y puede costar hasta $20.000 COP segun el trabajo; debemos valorarlo con una foto de tus uñas actuales."},
+                ],
+            },
+            "pin_dueno_hash": hashear_pin("1234"),
+        },
     ]
 
     servicios = [
@@ -451,6 +539,84 @@ def _semillas_negocios() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Li
             "tarifa_unitaria": 260000.0,
             "palabras_clave": ["balayage", "color", "tintura", "iluminaciones"],
             "duracion_minutos": 180,
+            "activo": True,
+        },
+        # Mile Cuentas Beauty (Fase 1: Manicura y Pedicura)
+        {
+            "negocio_id": "mile_cuentas_beauty",
+            "clave": "manicura_semipermanente",
+            "servicio_id_num": 1,
+            "nombre": "Manicura Semipermanente",
+            "descripcion": "Color y brillo duradero. Limpieza, preparacion y esmaltado semipermanente.",
+            "tarifa_unitaria": 35000.0,
+            "palabras_clave": ["manos", "manicura", "semipermanente", "unas"],
+            "duracion_minutos": 60,
+            "activo": True,
+        },
+        {
+            "negocio_id": "mile_cuentas_beauty",
+            "clave": "kapping_gel",
+            "servicio_id_num": 2,
+            "nombre": "Kapping Gel / Acrilico / Rubber",
+            "descripcion": "Fortalecimiento de una natural. Proteccion y resistencia sin perder naturalidad.",
+            "tarifa_unitaria": 45000.0,
+            "palabras_clave": ["manos", "manicura", "kapping", "acrilico", "rubber"],
+            "duracion_minutos": 60,
+            "activo": True,
+        },
+        {
+            "negocio_id": "mile_cuentas_beauty",
+            "clave": "dual_gel_premium",
+            "servicio_id_num": 3,
+            "nombre": "Dual Gel Premium",
+            "descripcion": "Esculpido Dual Gel. Unas resistentes con acabado impecable y ligero.",
+            "tarifa_unitaria": 60000.0,
+            "palabras_clave": ["manos", "manicura", "dual gel", "esculpido"],
+            "duracion_minutos": 90,
+            "activo": True,
+        },
+        {
+            "negocio_id": "mile_cuentas_beauty",
+            "clave": "soft_gel_premium",
+            "servicio_id_num": 4,
+            "nombre": "Soft Gel Premium",
+            "descripcion": "Extensiones Soft Gel. Acabado ligero, elegante y de aspecto natural.",
+            "tarifa_unitaria": 70000.0,
+            "palabras_clave": ["manos", "manicura", "soft gel", "extensiones"],
+            "duracion_minutos": 90,
+            "activo": True,
+        },
+        {
+            "negocio_id": "mile_cuentas_beauty",
+            "clave": "pedi_spa_essential",
+            "servicio_id_num": 5,
+            "nombre": "Pedi Spa Essential",
+            "descripcion": "Pedicure Spa tradicional. Limpieza de cuticulas, preparacion de unas y esmaltado semipermanente.",
+            "tarifa_unitaria": 25000.0,
+            "palabras_clave": ["pies", "pedicura", "pedi spa", "essential"],
+            "duracion_minutos": 60,
+            "activo": True,
+        },
+        {
+            "negocio_id": "mile_cuentas_beauty",
+            "clave": "pedi_spa_care",
+            "servicio_id_num": 6,
+            "nombre": "Pedi Spa Care",
+            "descripcion": "Pedicure Spa medium. Limpieza profunda, retiro de callosidades, hidratacion y esmaltado semipermanente.",
+            "tarifa_unitaria": 37000.0,
+            "palabras_clave": ["pies", "pedicura", "pedi spa", "care", "callosidades"],
+            "duracion_minutos": 60,
+            "activo": True,
+        },
+        {
+            "negocio_id": "mile_cuentas_beauty",
+            "clave": "pedi_spa_luxury",
+            "servicio_id_num": 7,
+            "nombre": "Pedi Spa Luxury",
+            "descripcion": "Pedicure Spa premium. Limpieza profunda, retiro de callosidades, hidratacion intensiva, terapia con burbuja efervescente, masaje con vela caliente y esmaltado semipermanente.",
+            "tarifa_unitaria": 50000.0,
+            "palabras_clave": ["pies", "pedicura", "pedi spa", "luxury", "vela caliente"],
+            "duracion_minutos": 90,
             "activo": True,
         },
     ]

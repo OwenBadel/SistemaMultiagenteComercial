@@ -657,6 +657,7 @@ $("#form-config-negocio").addEventListener("submit", async (ev) => {
     telefono_dueno: $("#cfg-tel-dueno").value,
     google_calendar_id: $("#cfg-calendar-id").value,
     horario_laboral: {
+      ...(negActual.horario_laboral || {}),
       dias: state.diasSeleccionados.length ? state.diasSeleccionados : [1, 2, 3, 4, 5, 6],
       inicio: $("#cfg-hora-ini").value || "08:00",
       fin: $("#cfg-hora-fin").value || "18:00",

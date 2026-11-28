@@ -43,7 +43,13 @@ def _formatear_horario_legible(horario: Dict[str, Any]) -> str:
     nombres = [_NOMBRES_DIAS.get(d, str(d)) for d in dias]
     inicio = str(horario.get("inicio", "08:00"))
     fin = str(horario.get("fin", "18:00"))
-    return f"{', '.join(nombres)} de {inicio} a {fin}"
+    pausas = horario.get("pausas") or []
+    txt_pausas = ""
+    if pausas:
+        tramos = [f"{p[0]}-{p[1]}" for p in pausas if isinstance(p, (list, tuple)) and len(p) == 2]
+        if tramos:
+            txt_pausas = f" (descanso: {', '.join(tramos)})"
+    return f"{', '.join(nombres)} de {inicio} a {fin}{txt_pausas}"
 
 
 def construir_cliente_calendar_negocio(
@@ -142,11 +148,17 @@ class ContextoHerramientasNegocio:
         self,
         items: List[Dict[str, Any]],
         aplicar_promocion: bool = False,
+        diseno_complejo: bool = False,
+        incluir_domicilio_base: bool = False,
+        pago_con_tarjeta: bool = False,
     ) -> Dict[str, Any]:
         servicios = {
             s["clave"]: s for s in self.repo.listar_servicios(self.negocio_id, solo_activos=True)
         }
         servicios_por_nombre = {s["nombre"].strip().casefold(): s for s in servicios.values()}
+        reglas_neg = (self.negocio.get("reglas_y_faq") or {}).get("reglas_cotizacion") or {}
+        categorias_unicas = [str(c).casefold() for c in (reglas_neg.get("una_por_categoria") or [])]
+        conteo_categorias: Dict[str, int] = {}
 
         detalle = []
         subtotal = 0.0
@@ -167,6 +179,22 @@ class ContextoHerramientasNegocio:
                         "servicios_disponibles": list(servicios.keys()),
                     },
                 )
+            if categorias_unicas:
+                palabras = [str(p).casefold() for p in (srv.get("palabras_clave") or [])]
+                for cat in categorias_unicas:
+                    if cat in palabras:
+                        conteo_categorias[cat] = conteo_categorias.get(cat, 0) + cantidad
+                        if conteo_categorias[cat] > 1:
+                            return self._registrar_traza(
+                                "calcular_cotizacion",
+                                {"items": items, "aplicar_promocion": aplicar_promocion},
+                                {
+                                    "error": (
+                                        f"Solo se permite combinar un servicio de '{cat}' por cita "
+                                        "(por ejemplo, 1 de manos y 1 de pies), salvo autorizacion manual de la propietaria."
+                                    )
+                                },
+                            )
             precio_u = float(srv["tarifa_unitaria"])
             linea = round(precio_u * cantidad, 2)
             subtotal += linea
@@ -190,6 +218,17 @@ class ContextoHerramientasNegocio:
                 {"items": items, "aplicar_promocion": aplicar_promocion},
                 {"error": "Debes indicar al menos un servicio del catalogo para cotizar."},
             )
+
+        adicionales: List[Dict[str, Any]] = []
+        if diseno_complejo and float(reglas_neg.get("costo_diseno_complejo") or 0) > 0:
+            val_dis = float(reglas_neg["costo_diseno_complejo"])
+            subtotal += val_dis
+            duracion_total = max(duracion_total, 120)
+            adicionales.append({"concepto": "Diseno complejo", "valor": val_dis})
+        if incluir_domicilio_base and float(reglas_neg.get("costo_domicilio_minimo") or 0) > 0:
+            val_dom = float(reglas_neg["costo_domicilio_minimo"])
+            subtotal += val_dom
+            adicionales.append({"concepto": "Domicilio base (confirmar segun distancia)", "valor": val_dom})
 
         descuento_pct = 0.0
         promo_aplicada = None
@@ -218,27 +257,63 @@ class ContextoHerramientasNegocio:
 
         descuento_valor = round(subtotal * (descuento_pct / 100.0), 2)
         total = round(subtotal - descuento_valor, 2)
+
+        recargo_tarjeta_valor = 0.0
+        recargo_pct = float(reglas_neg.get("recargo_tarjeta_pct") or 0.0)
+        if pago_con_tarjeta and recargo_pct > 0:
+            recargo_tarjeta_valor = round(total * (recargo_pct / 100.0), 2)
+            total = round(total + recargo_tarjeta_valor, 2)
+
+        anticipo_pct = float(reglas_neg.get("anticipo_porcentaje") or 0.0)
+        anticipo_valor = round(total * (anticipo_pct / 100.0), 2) if anticipo_pct > 0 else 0.0
+
         self.perfil["ultima_cotizacion"] = total
-        salida = {
+        salida: Dict[str, Any] = {
             "moneda": self.negocio["moneda"],
             "detalle": detalle,
+            "adicionales": adicionales,
             "subtotal": subtotal,
             "descuento_porciento": descuento_pct,
             "descuento_valor": descuento_valor,
+            "recargo_tarjeta_valor": recargo_tarjeta_valor,
             "total": total,
+            "anticipo_porcentaje": anticipo_pct,
+            "anticipo_valor": anticipo_valor,
+            "saldo_restante": round(total - anticipo_valor, 2),
             "duracion_total_minutos": duracion_total,
             "promocion_aplicada": promo_aplicada,
         }
         return self._registrar_traza(
             "calcular_cotizacion",
-            {"items": items, "aplicar_promocion": aplicar_promocion},
+            {
+                "items": items,
+                "aplicar_promocion": aplicar_promocion,
+                "diseno_complejo": diseno_complejo,
+                "incluir_domicilio_base": incluir_domicilio_base,
+                "pago_con_tarjeta": pago_con_tarjeta,
+            },
             salida,
         )
+
+    def _bloques_pausa_dia(self, dia_obj: date) -> List[Tuple[datetime, datetime]]:
+        horario = self.negocio.get("horario_laboral") or {}
+        bloques: List[Tuple[datetime, datetime]] = []
+        for tramo in horario.get("pausas") or []:
+            if isinstance(tramo, (list, tuple)) and len(tramo) == 2:
+                p_ini_h, p_ini_m = _parsear_hhmm(str(tramo[0]), (12, 0))
+                p_fin_h, p_fin_m = _parsear_hhmm(str(tramo[1]), (14, 0))
+                dt_p_ini = datetime.combine(dia_obj, time(p_ini_h, p_ini_m), tzinfo=self.tz)
+                dt_p_fin = datetime.combine(dia_obj, time(p_fin_h, p_fin_m), tzinfo=self.tz)
+                if dt_p_fin > dt_p_ini:
+                    bloques.append((dt_p_ini, dt_p_fin))
+        return bloques
 
     def _obtener_ocupados_dia(
         self, dia_ini: datetime, dia_fin: datetime
     ) -> Tuple[List[Tuple[datetime, datetime]], Optional[str]]:
-        ocupados: List[Tuple[datetime, datetime]] = []
+        horario = self.negocio.get("horario_laboral") or {}
+        buffer_min = max(0, int(horario.get("buffer_minutos") or 0))
+        ocupados: List[Tuple[datetime, datetime]] = list(self._bloques_pausa_dia(dia_ini.date()))
         for c in self.repo.listar_agendamientos(
             self.negocio_id,
             fecha_inicio=dia_ini.isoformat(),
@@ -248,7 +323,7 @@ class ContextoHerramientasNegocio:
             try:
                 c_ini = datetime.fromisoformat(str(c["fecha_inicio"]).replace("Z", "+00:00")).astimezone(self.tz)
                 c_fin = datetime.fromisoformat(str(c["fecha_fin"]).replace("Z", "+00:00")).astimezone(self.tz)
-                ocupados.append((c_ini, c_fin))
+                ocupados.append((c_ini, c_fin + timedelta(minutes=buffer_min)))
             except ValueError:
                 continue
 
@@ -256,7 +331,8 @@ class ContextoHerramientasNegocio:
         error_cal: Optional[str] = None
         if cal_cliente is not None:
             try:
-                ocupados.extend(cal_cliente._consultar_freebusy(dia_ini, dia_fin))
+                for b_ini, b_fin in cal_cliente._consultar_freebusy(dia_ini, dia_fin):
+                    ocupados.append((b_ini, b_fin + timedelta(minutes=buffer_min)))
             except ErrorGoogleCalendar as exc:
                 error_cal = str(exc)
         return ocupados, error_cal
@@ -283,6 +359,18 @@ class ContextoHerramientasNegocio:
             )
 
         horario = self.negocio.get("horario_laboral") or {}
+        max_dias = horario.get("max_dias_anticipacion")
+        if max_dias is not None and dia_obj > ahora.date() + timedelta(days=int(max_dias)):
+            return self._registrar_traza(
+                "consultar_horarios_disponibles",
+                {"fecha": dia_obj.isoformat(), "duracion_minutos": duracion_minutos},
+                {
+                    "fecha": dia_obj.isoformat(),
+                    "disponible": False,
+                    "bloques_disponibles": [],
+                    "error": f"Solo se permite reservar con maximo {int(max_dias)} dia(s) de anticipacion.",
+                },
+            )
         dias_lab = [int(d) for d in horario.get("dias", [1, 2, 3, 4, 5, 6])]
         if dia_obj.isoweekday() not in dias_lab:
             return self._registrar_traza(
@@ -417,6 +505,17 @@ class ContextoHerramientasNegocio:
         dt_fin = dt_ini + timedelta(minutes=duracion)
 
         horario = self.negocio.get("horario_laboral") or {}
+        max_dias = horario.get("max_dias_anticipacion")
+        if max_dias is not None and dt_ini.date() > ahora.date() + timedelta(days=int(max_dias)):
+            return self._registrar_traza(
+                "agendar_cita",
+                entrada,
+                {
+                    "confirmada": False,
+                    "error": f"Solo se puede reservar con maximo {int(max_dias)} dia(s) de anticipacion.",
+                },
+            )
+
         dias_lab = [int(d) for d in horario.get("dias", [1, 2, 3, 4, 5, 6])]
         h_ini, m_ini = _parsear_hhmm(str(horario.get("inicio", "08:00")), (8, 0))
         h_fin, m_fin = _parsear_hhmm(str(horario.get("fin", "18:00")), (18, 0))
@@ -432,6 +531,45 @@ class ContextoHerramientasNegocio:
                     "error": f"El horario solicitado esta fuera de nuestra jornada ({_formatear_horario_legible(horario)}).",
                 },
             )
+
+        for p_ini, p_fin in self._bloques_pausa_dia(dt_ini.date()):
+            if dt_ini < p_fin and dt_fin > p_ini:
+                alt = self.consultar_horarios_disponibles(dt_ini.date().isoformat(), duracion)
+                return self._registrar_traza(
+                    "agendar_cita",
+                    entrada,
+                    {
+                        "confirmada": False,
+                        "error": f"Ese horario cruza el descanso de jornada ({p_ini.strftime('%H:%M')} a {p_fin.strftime('%H:%M')}).",
+                        "bloques_alternativos": alt.get("bloques_disponibles", [])[:4],
+                    },
+                )
+
+        buffer_min = max(0, int(horario.get("buffer_minutos") or 0))
+        if buffer_min > 0:
+            ocupados_bd = self.repo.listar_agendamientos(
+                self.negocio_id,
+                fecha_inicio=(dt_ini - timedelta(minutes=buffer_min)).isoformat(),
+                fecha_fin=(dt_fin + timedelta(minutes=buffer_min)).isoformat(),
+                solo_activos=True,
+            )
+            for c in ocupados_bd:
+                try:
+                    c_ini = datetime.fromisoformat(str(c["fecha_inicio"]).replace("Z", "+00:00")).astimezone(self.tz)
+                    c_fin = datetime.fromisoformat(str(c["fecha_fin"]).replace("Z", "+00:00")).astimezone(self.tz)
+                    if dt_ini < c_fin + timedelta(minutes=buffer_min) and dt_fin + timedelta(minutes=buffer_min) > c_ini:
+                        alt = self.consultar_horarios_disponibles(dt_ini.date().isoformat(), duracion)
+                        return self._registrar_traza(
+                            "agendar_cita",
+                            entrada,
+                            {
+                                "confirmada": False,
+                                "error": f"Se requiere un intervalo minimo de {buffer_min} minutos entre citas.",
+                                "bloques_alternativos": alt.get("bloques_disponibles", [])[:4],
+                            },
+                        )
+                except ValueError:
+                    continue
 
         cal_cliente = self._fabrica_calendar(self.negocio, self.config)
         if cal_cliente is not None:
@@ -460,6 +598,10 @@ class ContextoHerramientasNegocio:
                 gcal_estado = "error"
                 observaciones = f"{observaciones} | Google Calendar no verificado: {exc}".strip(" |")
 
+        reglas_cot = (self.negocio.get("reglas_y_faq") or {}).get("reglas_cotizacion") or {}
+        requiere_manual = bool(reglas_cot.get("requiere_confirmacion_manual_pago", False))
+        estado_inicial = "pendiente" if requiere_manual else "confirmada"
+
         try:
             registro = self.repo.registrar_agendamiento(
                 self.negocio_id,
@@ -470,7 +612,7 @@ class ContextoHerramientasNegocio:
                     "servicio": srv["nombre"],
                     "fecha_inicio": dt_ini.isoformat(),
                     "fecha_fin": dt_fin.isoformat(),
-                    "estado": "confirmada",
+                    "estado": estado_inicial,
                     "registrado_en": registrado_en,
                     "google_calendar_estado": gcal_estado,
                     "observaciones": observaciones,
@@ -529,8 +671,12 @@ class ContextoHerramientasNegocio:
             )
 
         self.perfil["nombre"] = nombre_limpio
+        anticipo_pct = float(reglas_cot.get("anticipo_porcentaje") or 0.0)
         self.cita_confirmada = {
-            "confirmada": True,
+            "confirmada": not requiere_manual,
+            "estado_cita": estado_inicial,
+            "requiere_confirmacion_manual_pago": requiere_manual,
+            "anticipo_porcentaje": anticipo_pct,
             "agendamiento_id": registro["id"],
             "servicio": srv["nombre"],
             "fecha_hora": dt_ini.strftime("%Y-%m-%d %H:%M"),

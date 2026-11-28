@@ -150,3 +150,70 @@ INSERT INTO promociones_vigentes (
     TRUE,
     '{"servicios":["manicure_semipermanente","pedicure_spa","diseno_cejas_laminado","cepillado_hidratacion"],"cantidad_minima":2,"cantidad_maxima":10}'::jsonb
 ) ON CONFLICT (negocio_id, codigo) DO NOTHING;
+
+-- =============================================================================
+-- SEMILLA 3: Mile Cuentas Beauty (Cartagena, Manicura y Pedicura - Fase 1)
+-- PIN inicial de demo = 1234 (OBLIGATORIO cambiar desde el panel PWA al desplegar)
+-- =============================================================================
+INSERT INTO negocios (
+    id, nombre_negocio, rubro, moneda, unidad_cantidad, etiqueta_cantidad,
+    etiqueta_complejidad, telefono_dueno, whatsapp_negocio, margen_base, margen_minimo,
+    descuento_maximo, mensaje_catalogo_intro, activo, zona_horaria,
+    horario_laboral, reglas_y_faq, pin_dueno_hash
+) VALUES (
+    'mile_cuentas_beauty',
+    'Mile Cuentas Beauty',
+    'Servicios de Manicura y Pedicura',
+    'COP',
+    'servicios',
+    'cantidad_servicios',
+    'diseno',
+    '573006900581',
+    '573006900581',
+    0.45,
+    0.45,
+    0.0,
+    'Con gusto te comparto nuestros servicios de manicura y pedicura',
+    TRUE,
+    'America/Bogota',
+    '{"dias":[1,2,3,4,5,6,7],"inicio":"08:00","fin":"17:00","duracion_min":60,"pausas":[["12:00","14:00"]],"buffer_minutos":15,"max_dias_anticipacion":1}'::jsonb,
+    '{
+        "propietaria": "Mileidis Cuentas",
+        "ciudad": "Cartagena, Colombia",
+        "instagram": "@milecuentas_beauty",
+        "tono_marca": "Muy calido, cercano, femenino, elegante, natural y servicial. Puedes usar expresiones como reina, mi amor y bella con naturalidad y sin repetirlas en exceso.",
+        "direccion": "No se comparte automaticamente. La propietaria envia la ubicacion exacta el dia de la cita.",
+        "metodos_pago": "Nequi (llave Bre-B 300 690 0581, titular Mileidis Cuentas), efectivo y tarjetas de credito (recargo del 5% por pago con tarjeta). Enviar comprobante al WhatsApp 300 690 0581.",
+        "politicas": "Atencion en local y a domicilio (domicilio desde $15.000 COP segun distancia). Una clienta por cita. Solo se permite combinar 1 servicio de manos y 1 de pies por reserva. Reserva con maximo 1 dia de anticipacion. Anticipo obligatorio del 20% (en diciembre, 1 hora para enviarlo). La cita queda PENDIENTE hasta que la propietaria verifique manualmente el pago. Cancelaciones o inasistencia pierden el anticipo. Reprogramaciones minimo 24 horas antes. Tolerancia maxima de llegada tarde: 15 minutos.",
+        "reglas_cotizacion": {
+            "una_por_categoria": ["manos", "pies"],
+            "costo_diseno_complejo": 25000.0,
+            "costo_domicilio_minimo": 15000.0,
+            "anticipo_porcentaje": 20.0,
+            "recargo_tarjeta_pct": 5.0,
+            "requiere_confirmacion_manual_pago": true
+        },
+        "instrucciones_adicionales": "1. NO envies el catalogo automaticamente al iniciar la conversacion; compartelo solo cuando la clienta lo necesite y SIN listar precios en el catalogo general (comunica precios de forma conversacional al cotizar o cuando pregunten).\n2. Pregunta si desea atencion en el local o a domicilio (si es domicilio, pide sector/ubicacion e informa que el domicilio parte desde $15.000 COP segun distancia). Pregunta tambien si desea diseno simple (incluido) o diseno complejo (+$25.000 COP, pide foto de referencia) y si requiere retiro de trabajo anterior (20 a 60 min extra y hasta $20.000 COP, requiere valoracion humana con foto).\n3. Nunca confirmes una cita como definitiva: al agendar indica el valor del anticipo del 20%, los datos de pago (Bre-B / Nequi 300 690 0581 a nombre de Mileidis Cuentas) y aclara que la cita queda pendiente hasta que la propietaria verifique el pago.\n4. Si preguntan por servicios de cabello (hidratacion capilar, blower, keratinas, tintes) o cualquier servicio fuera de manicura/pedicura, NO cotices ni agendes: responde con calidez que la propietaria le dara esa informacion y llama a escalar_a_humano.\n5. Escala tambien a escalar_a_humano si no es claro si el diseno es simple o complejo, si requiere valorar retiro, si pide excepcion a politicas o si hay queja.",
+        "preguntas_frecuentes": [
+            {"pregunta": "Donde estan ubicados?", "respuesta": "Estamos en Cartagena. Por privacidad, Mileidis te envia la ubicacion exacta el dia de tu cita."},
+            {"pregunta": "Tienen servicio a domicilio?", "respuesta": "Si, ofrecemos domicilio para todos los servicios desde $15.000 COP segun la distancia."},
+            {"pregunta": "El diseno tiene costo adicional?", "respuesta": "Los diseños simples del portafolio estan incluidos en el precio base. Los diseños complejos (dibujos elaborados en todas las uñas) tienen un adicional de $25.000 COP."},
+            {"pregunta": "Que pasa si tengo trabajo anterior para retirar?", "respuesta": "El retiro toma entre 20 y 60 minutos adicionales y puede costar hasta $20.000 COP segun el trabajo; debemos valorarlo con una foto de tus uñas actuales."}
+        ]
+    }'::jsonb,
+    'pbkdf2_sha256$sma2026demo00001$530c9063fb99eacf687a4165bdb145b43babafa5eca20f868c6f8944e0aef9e1'
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO servicios (
+    negocio_id, clave, servicio_id_num, nombre, descripcion, tarifa_unitaria,
+    palabras_clave, requiere_complejidad, costo_adicional_mantenimiento,
+    duracion_minutos, activo
+) VALUES
+    ('mile_cuentas_beauty', 'manicura_semipermanente', 1, 'Manicura Semipermanente', 'Color y brillo duradero. Limpieza, preparacion y esmaltado semipermanente.', 35000, '["manos","manicura","semipermanente","unas"]'::jsonb, FALSE, 0, 60, TRUE),
+    ('mile_cuentas_beauty', 'kapping_gel', 2, 'Kapping Gel / Acrilico / Rubber', 'Fortalecimiento de una natural. Proteccion y resistencia sin perder naturalidad.', 45000, '["manos","manicura","kapping","acrilico","rubber"]'::jsonb, FALSE, 0, 60, TRUE),
+    ('mile_cuentas_beauty', 'dual_gel_premium', 3, 'Dual Gel Premium', 'Esculpido Dual Gel. Unas resistentes con acabado impecable y ligero.', 60000, '["manos","manicura","dual gel","esculpido"]'::jsonb, FALSE, 0, 90, TRUE),
+    ('mile_cuentas_beauty', 'soft_gel_premium', 4, 'Soft Gel Premium', 'Extensiones Soft Gel. Acabado ligero, elegante y de aspecto natural.', 70000, '["manos","manicura","soft gel","extensiones"]'::jsonb, FALSE, 0, 90, TRUE),
+    ('mile_cuentas_beauty', 'pedi_spa_essential', 5, 'Pedi Spa Essential', 'Pedicure Spa tradicional. Limpieza de cuticulas, preparacion de unas y esmaltado semipermanente.', 25000, '["pies","pedicura","pedi spa","essential"]'::jsonb, FALSE, 0, 60, TRUE),
+    ('mile_cuentas_beauty', 'pedi_spa_care', 6, 'Pedi Spa Care', 'Pedicure Spa medium. Limpieza profunda, retiro de callosidades, hidratacion y esmaltado semipermanente.', 37000, '["pies","pedicura","pedi spa","care","callosidades"]'::jsonb, FALSE, 0, 60, TRUE),
+    ('mile_cuentas_beauty', 'pedi_spa_luxury', 7, 'Pedi Spa Luxury', 'Pedicure Spa premium. Limpieza profunda, retiro de callosidades, hidratacion intensiva, terapia con burbuja efervescente, masaje con vela caliente y esmaltado semipermanente.', 50000, '["pies","pedicura","pedi spa","luxury","vela caliente"]'::jsonb, FALSE, 0, 90, TRUE)
+ON CONFLICT (negocio_id, clave) DO NOTHING;
