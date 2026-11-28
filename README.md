@@ -52,7 +52,7 @@ Copia `.env.example` como `.env` y completa tus claves:
 
 ```env
 GEMINI_API_KEY=tu_api_key_de_google_ai_studio
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.8-flash
 
 SUPABASE_URL=
 SUPABASE_KEY=
