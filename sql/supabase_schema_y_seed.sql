@@ -1,13 +1,24 @@
 -- =============================================================================
 -- SistemaMultiagenteComercial - Esquema Relacional y Semillas Oficiales (Supabase)
--- Para proyectos NUEVOS en Supabase:
+-- Instrucciones:
 --   1. Abre Supabase -> SQL Editor -> New Query.
 --   2. Pega y ejecuta este script completo una sola vez.
 --   3. Configura SUPABASE_URL y SUPABASE_KEY (secret / service_role) en .env.
--- (Si ya tenias el esquema academico anterior, usa sql/supabase_comercial_v2.sql)
+-- ADVERTENCIA: Elimina y recrea todas las tablas desde cero (ideal para instalar
+-- o limpiar una base de datos anterior). No ejecutar si ya tienes citas reales.
 -- =============================================================================
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+-- Limpieza total de tablas anteriores (incluyendo tablas legacy de ML)
+DROP TABLE IF EXISTS public.agendamientos CASCADE;
+DROP TABLE IF EXISTS public.alertas_humanas CASCADE;
+DROP TABLE IF EXISTS public.perfiles_clientes CASCADE;
+DROP TABLE IF EXISTS public.promociones_vigentes CASCADE;
+DROP TABLE IF EXISTS public.servicios CASCADE;
+DROP TABLE IF EXISTS public.tarifas_historicas CASCADE;
+DROP TABLE IF EXISTS public.historico_ofertas CASCADE;
+DROP TABLE IF EXISTS public.negocios CASCADE;
 
 -- 1. Negocios (multi-tenant)
 CREATE TABLE IF NOT EXISTS public.negocios (

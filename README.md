@@ -43,8 +43,8 @@ FastAPI (src/comercial/servidor_comercial.py)
 ## 2. Base de Datos y Configuración
 
 ### Opción A: Supabase PostgreSQL (recomendada para producción)
-1. **Si tu proyecto Supabase es nuevo:** pega y ejecuta únicamente [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) en el **SQL Editor** de Supabase (crea las 6 tablas con RLS, índices únicos por canal y carga `estudio_fotografia` y `mile_cuentas_beauty`).
-2. **Si ya tenías el esquema antiguo de la versión universitaria:** ejecuta la migración aditiva [`sql/supabase_comercial_v2.sql`](sql/supabase_comercial_v2.sql).
+1. En **Supabase -> SQL Editor -> New query**, pega y ejecuta [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) (recrea las 6 tablas limpias con RLS, índices únicos por canal y carga `estudio_fotografia` y `mile_cuentas_beauty`).
+2. En **Project Settings -> Data API / API Keys**, copia tu `SUPABASE_URL` y tu `SUPABASE_KEY` (`service_role` / secret key) en `.env`.
 
 ### Opción B: SQLite local (desarrollo inmediato)
 Si dejas `SUPABASE_URL` y `SUPABASE_KEY` vacías en `.env`, el servidor inicializa automáticamente `data/comercial_multitenant.db` con `estudio_fotografia` y `salon_belleza` precargados.
