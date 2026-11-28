@@ -1,5 +1,5 @@
 """
-Motor conversacional y de onboarding basado en Google Gemini 2.5 Flash (`google-genai`).
+Motor conversacional y de onboarding basado en Google Gemini Flash (`google-genai`).
 Usa Tool Calling manual controlado para garantizar cero alucinaciones en precios/agenda
 y Structured Outputs (Pydantic) para crear o actualizar negocios conversacionalmente.
 """
@@ -282,7 +282,7 @@ def _construir_instruccion_sistema(negocio: Dict[str, Any]) -> str:
 
 
 class OrquestadorComercialGemini:
-    """Orquesta conversaciones multi-negocio sobre Gemini 2.5 Flash con Tool Calling seguro."""
+    """Orquesta conversaciones multi-negocio sobre Google Gemini Flash con Tool Calling seguro."""
 
     def __init__(
         self,

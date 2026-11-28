@@ -2,9 +2,8 @@
 Conector oficial con Google Calendar API v3 mediante Service Account (google-auth)
 y peticiones REST HTTPS con httpx.
 
-Permite a EntornoVirtualAtencion y AgenteAgendamientos consultar disponibilidad
-real (freeBusy), proponer huecos libres del dia y agendar citas reales en el
-calendario del dueno del negocio.
+Permite consultar disponibilidad real (freeBusy), proponer huecos libres del dia
+y crear o eliminar citas reales en el calendario de cada negocio.
 """
 from __future__ import annotations
 

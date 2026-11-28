@@ -1,1 +1,1 @@
-"""Paquete comercial multi-negocio basado en Gemini 2.5 Flash + Tool Calling."""
+"""Paquete comercial multi-negocio basado en Google Gemini Flash + Tool Calling."""

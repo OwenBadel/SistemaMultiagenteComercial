@@ -1,6 +1,6 @@
 """
-Punto de entrada principal de la rama comercial multi-negocio.
-Ejecuta FastAPI + Uvicorn con Gemini 2.5 Flash (Tool Calling), Supabase/SQLite,
+Punto de entrada principal de la plataforma comercial multi-negocio.
+Ejecuta FastAPI + Uvicorn con Google Gemini Flash (Tool Calling), Supabase/SQLite,
 Google Calendar independiente por negocio y Panel PWA movil de alto contraste.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from src.comercial.servidor_comercial import crear_app_comercial, crear_reposito
 
 def _construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Plataforma Comercial Multi-Negocio (Gemini 2.5 Flash + WhatsApp + Panel PWA)"
+        description="Plataforma Comercial Multi-Negocio (Gemini Flash + WhatsApp + Panel PWA)"
     )
     parser.add_argument("--host", default=None, help="Host HTTP de escucha (default: HOST en .env o 0.0.0.0)")
     parser.add_argument("--port", type=int, default=None, help="Puerto HTTP (default: PORT en .env o 8000)")

@@ -1,5 +1,5 @@
 """
-Herramientas deterministas (roles especialistas) invocadas por Gemini 2.5 Flash
+Herramientas deterministas (roles especialistas) invocadas por Google Gemini Flash
 via Tool Calling, estrictamente aisladas por `negocio_id`.
 """
 from __future__ import annotations

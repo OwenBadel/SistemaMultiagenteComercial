@@ -1,8 +1,10 @@
-# SistemaMultiagenteComercial — Plataforma Comercial Multi-Negocio (`comercial`)
+# SistemaMultiagenteComercial — Plataforma Comercial Multi-Negocio
 
-Plataforma SaaS comercial multi-negocio para atención automatizada por WhatsApp, cotización determinista, agendamiento real en Google Calendar y supervisión humana desde un panel móvil instalable (PWA). Construida en Python con **FastAPI**, **Google Gemini 2.5 Flash** (`google-genai` con Tool Calling nativo), **Supabase PostgreSQL / SQLite**, **Google Calendar API v3** y compatibilidad dual con **Botpress Studio** y **Meta WhatsApp Cloud API**.
+Plataforma SaaS comercial multi-negocio para atención automatizada por WhatsApp, cotización determinista, agendamiento real en Google Calendar y supervisión humana desde un panel móvil instalable (PWA). Construida en Python con **FastAPI**, **Google Gemini Flash** (`google-genai` con Tool Calling nativo, modelo recomendado `gemini-3.1-flash-lite`), **Supabase PostgreSQL / SQLite**, **Google Calendar API v3** y compatibilidad dual con **Botpress Studio** y **Meta WhatsApp Cloud API**.
 
-> **Nota sobre ramas:** La rama `main` conserva intacta la arquitectura académica original (SPADE + Llama local + Scikit-Learn). Esta rama `comercial` implementa la arquitectura de producción multi-negocio sobre un único servidor.
+> **Nota sobre ramas:** La rama `v1-universidad` conserva intacta la arquitectura académica original (SPADE + Llama local + Scikit-Learn). Esta rama `main` implementa la plataforma comercial multi-negocio sobre un único servidor.
+>
+> **Guía rápida para Botpress y `.env`:** consulta [`docs/GUIA_BOTPRESS_Y_ENV.md`](docs/GUIA_BOTPRESS_Y_ENV.md).
 
 ---
 
@@ -17,7 +19,7 @@ Clientes WhatsApp (Negocio A: Fotografia, Negocio B: Belleza, Negocio N: Pizzeri
   v
 FastAPI (src/comercial/servidor_comercial.py)
   |-- Aislamiento estricto por negocio_id (reglas, catalogo, horarios, agenda, chats y dueno)
-  |-- OrquestadorComercialGemini (Gemini 2.5 Flash + 5 herramientas deterministas)
+  |-- OrquestadorComercialGemini (Gemini Flash + 5 herramientas deterministas)
   |     1. consultar_servicios
   |     2. calcular_cotizacion
   |     3. consultar_horarios_disponibles (horarios por dia + Google Calendar + BD)
@@ -31,7 +33,7 @@ FastAPI (src/comercial/servidor_comercial.py)
 ### Capacidades principales
 
 1. **Multi-negocio en una sola instancia:** Dos o más negocios (`estudio_fotografia`, `salon_belleza` o cualquier rubro nuevo) operan simultáneamente con separación total de números de WhatsApp, dueños, catálogos, horarios laborales por día, promociones, reglas de atención, calendarios y chats.
-2. **Motor Gemini 2.5 Flash con herramientas deterministas:** El modelo comprende lenguaje natural libre sin depender de palabras clave rígidas, mientras todos los precios, cálculos, horarios y reservas se ejecutan mediante herramientas deterministas conectadas a la base de datos.
+2. **Motor Gemini Flash con herramientas deterministas:** El modelo comprende lenguaje natural libre sin depender de palabras clave rígidas, mientras todos los precios, cálculos, horarios y reservas se ejecutan mediante herramientas deterministas conectadas a la base de datos.
 3. **Escalamiento humano por chat con notificación al dueño:** Cuando un cliente requiere atención personal (reclamos, pedidos fuera de catálogo o solicitud explícita de hablar con una persona), se pausa únicamente ese chat, se envía una alerta al WhatsApp personal del dueño con un resumen breve y enlace directo `wa.me`, y el caso aparece en la bandeja del panel PWA para reactivar el asistente cuando corresponda.
 4. **Alta de nuevos negocios sin tocar código:** Desde el panel de Administrador, un asistente conversacional guiado por Gemini entrevista al operador o al dueño (rubro, servicios, precios, duración, horarios, promociones y números de WhatsApp), rellena automáticamente un formulario editable y crea el negocio listo para operar.
 5. **Panel PWA móvil instalable:** Diseñado con enfoque mobile-first, instalable en Android y iOS desde el navegador, con simulador de chat integrado por negocio.

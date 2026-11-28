@@ -28,7 +28,7 @@ class ConfiguracionComercial:
     """Variables de entorno para el backend comercial multi-tenant."""
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.8-flash"
+    gemini_model: str = "gemini-3.1-flash-lite"
     supabase_url: str = ""
     supabase_key: str = ""
     sqlite_db_path: str = "data/comercial_multitenant.db"
@@ -71,7 +71,7 @@ class ConfiguracionComercial:
         session_secret = os.getenv("SESSION_SECRET", "").strip()
         return cls(
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash",
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite").strip() or "gemini-3.1-flash-lite",
             supabase_url=os.getenv("SUPABASE_URL", "").strip(),
             supabase_key=os.getenv("SUPABASE_KEY", "").strip(),
             sqlite_db_path=os.getenv("SQLITE_DB_PATH", "data/comercial_multitenant.db").strip(),

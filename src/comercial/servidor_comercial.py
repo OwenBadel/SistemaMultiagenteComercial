@@ -1,8 +1,8 @@
 """
-Servidor FastAPI multi-negocio (rama comercial):
+Servidor FastAPI multi-negocio:
 - Webhooks para Botpress Studio y Meta WhatsApp Cloud API directa
 - Panel PWA movil de alto contraste para Super-Admin y Duenos de Negocio
-- Onboarding conversacional con Gemini 2.5 Flash Structured Outputs
+- Onboarding conversacional con Google Gemini Flash Structured Outputs
 """
 from __future__ import annotations
 
@@ -959,7 +959,7 @@ def crear_app_comercial(
             raise HTTPException(status_code=404, detail="Negocio no encontrado.")
 
     # -----------------------------------------------------------------------
-    # Onboarding Conversacional con Gemini 2.5 Flash (Solo Super-Admin)
+    # Onboarding Conversacional con Google Gemini Flash (Solo Super-Admin)
     # -----------------------------------------------------------------------
     @app.post("/api/onboarding/chat")
     def onboarding_conversacional(
