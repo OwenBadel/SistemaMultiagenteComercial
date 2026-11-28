@@ -51,6 +51,7 @@ class ServicioBorrador(BaseModel):
     descripcion: str = Field(default="", description="Que incluye exactamente el servicio.")
     tarifa_unitaria: float = Field(default=0.0, description="Precio numerico sin simbolos.")
     duracion_minutos: int = Field(default=60, description="Duracion aproximada en minutos.")
+    palabras_clave: List[str] = Field(default_factory=list, description="Categoria o palabras clave, ej. ['manos', 'manicura'].")
 
 
 class PromocionBorrador(BaseModel):
@@ -70,6 +71,18 @@ class HorarioBorrador(BaseModel):
     inicio: str = Field(default="08:00", description="Hora apertura HH:MM")
     fin: str = Field(default="18:00", description="Hora cierre HH:MM")
     duracion_min: int = Field(default=60, description="Duracion base de citas en minutos")
+    pausas: List[List[str]] = Field(default_factory=list, description="Tramos de descanso, ej. [['12:00','14:00']]")
+    buffer_minutos: int = Field(default=0, description="Minutos libres requeridos entre citas")
+    max_dias_anticipacion: Optional[int] = Field(default=None, description="Maximo de dias de anticipacion para reservar")
+
+
+class ReglasCotizacionBorrador(BaseModel):
+    una_por_categoria: List[str] = Field(default_factory=list)
+    costo_diseno_complejo: float = Field(default=0.0)
+    costo_domicilio_minimo: float = Field(default=0.0)
+    anticipo_porcentaje: float = Field(default=0.0)
+    recargo_tarjeta_pct: float = Field(default=0.0)
+    requiere_confirmacion_manual_pago: bool = Field(default=False)
 
 
 class ReglasFaqBorrador(BaseModel):
@@ -77,6 +90,8 @@ class ReglasFaqBorrador(BaseModel):
     direccion: str = Field(default="")
     metodos_pago: str = Field(default="")
     politicas: str = Field(default="")
+    instrucciones_adicionales: str = Field(default="")
+    reglas_cotizacion: ReglasCotizacionBorrador = Field(default_factory=ReglasCotizacionBorrador)
     preguntas_frecuentes: List[PreguntaFrecuenteBorrador] = Field(default_factory=list)
 
 

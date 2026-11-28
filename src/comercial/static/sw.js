@@ -1,4 +1,4 @@
-const CACHE_NAME = "centro-comercial-ia-v2";
+const CACHE_NAME = "centro-comercial-ia-v3";
 const STATIC_ASSETS = ["/", "/static/styles.css", "/static/app.js", "/static/icon.svg", "/manifest.json"];
 
 self.addEventListener("install", (event) => {

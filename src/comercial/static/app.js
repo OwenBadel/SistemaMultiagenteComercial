@@ -307,6 +307,7 @@ function renderServicios(servicios, moneda) {
         <div class="btn-row">
           <span class="pill neutral mono">${Number(s.duracion_minutos || 60)} min</span>
           <span class="pill neutral mono">${esc(s.clave)}</span>
+          ${(s.palabras_clave || []).slice(0, 2).map((t) => `<span class="pill info">${esc(t)}</span>`).join("")}
         </div>
         <div class="btn-row">
           <button type="button" class="btn" data-editar-srv="${esc(s.clave)}">Editar</button>
@@ -373,6 +374,21 @@ function llenarFormularioConfig(neg, integracion) {
   $("#cfg-tono").value = reg.tono_marca || "";
   $("#cfg-pin").value = "";
   $("#cfg-webhook-url").textContent = integracion.webhook_botpress || "";
+
+  const pausas = Array.isArray(hor.pausas) && hor.pausas.length > 0 ? hor.pausas[0] : [];
+  $("#cfg-pausa-ini").value = pausas[0] || "";
+  $("#cfg-pausa-fin").value = pausas[1] || "";
+  $("#cfg-buffer-min").value = Number(hor.buffer_minutos || 0);
+  $("#cfg-max-dias").value = hor.max_dias_anticipacion ?? "";
+
+  const rcot = reg.reglas_cotizacion || {};
+  $("#cfg-diseno-complejo").value = Number(rcot.costo_diseno_complejo || 0);
+  $("#cfg-domicilio-min").value = Number(rcot.costo_domicilio_minimo || 0);
+  $("#cfg-anticipo-pct").value = Number(rcot.anticipo_porcentaje || 0);
+  $("#cfg-tarjeta-pct").value = Number(rcot.recargo_tarjeta_pct || 0);
+  $("#cfg-una-por-cat").value = Array.isArray(rcot.una_por_categoria) ? rcot.una_por_categoria.join(", ") : "";
+  $("#cfg-confirmacion-manual").checked = Boolean(rcot.requiere_confirmacion_manual_pago);
+  $("#cfg-instrucciones-extra").value = reg.instrucciones_adicionales || "";
 }
 
 function cambiarTab(tab) {
@@ -545,6 +561,10 @@ $("#form-cita-manual").addEventListener("submit", async (ev) => {
 $("#form-servicio").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   try {
+    const tags = String($("#srv-tags").value || "")
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
     await api(`/api/negocios/${encodeURIComponent(state.negocioId)}/servicios`, {
       method: "POST",
       body: JSON.stringify({
@@ -552,6 +572,7 @@ $("#form-servicio").addEventListener("submit", async (ev) => {
         nombre: $("#srv-nombre").value,
         tarifa_unitaria: Number($("#srv-precio").value || 0),
         duracion_minutos: Number($("#srv-duracion").value || 60),
+        palabras_clave: tags,
         descripcion: $("#srv-desc").value,
         activo: true,
       }),
@@ -579,6 +600,7 @@ $("#lista-servicios").addEventListener("click", async (ev) => {
       $("#srv-nombre").value = srv.nombre;
       $("#srv-precio").value = srv.tarifa_unitaria;
       $("#srv-duracion").value = srv.duracion_minutos || 60;
+      $("#srv-tags").value = Array.isArray(srv.palabras_clave) ? srv.palabras_clave.join(", ") : "";
       $("#srv-desc").value = srv.descripcion || "";
       $("#srv-nombre").focus();
     }
@@ -651,24 +673,45 @@ $("#form-config-negocio").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const negActual = state.resumen?.negocio || {};
   const reglasActuales = negActual.reglas_y_faq || {};
+  const pausaIni = $("#cfg-pausa-ini").value;
+  const pausaFin = $("#cfg-pausa-fin").value;
+  const maxDiasRaw = $("#cfg-max-dias").value.trim();
+  const horarioPayload = {
+    ...(negActual.horario_laboral || {}),
+    dias: state.diasSeleccionados.length ? state.diasSeleccionados : [1, 2, 3, 4, 5, 6],
+    inicio: $("#cfg-hora-ini").value || "08:00",
+    fin: $("#cfg-hora-fin").value || "18:00",
+    duracion_min: negActual.horario_laboral?.duracion_min || 60,
+    pausas: pausaIni && pausaFin ? [[pausaIni, pausaFin]] : [],
+    buffer_minutos: Number($("#cfg-buffer-min").value || 0),
+    max_dias_anticipacion: maxDiasRaw !== "" ? Number(maxDiasRaw) : null,
+  };
+  const cats = String($("#cfg-una-por-cat").value || "")
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean);
   const payload = {
     nombre_negocio: $("#cfg-nombre").value,
     rubro: $("#cfg-rubro").value,
     telefono_dueno: $("#cfg-tel-dueno").value,
     google_calendar_id: $("#cfg-calendar-id").value,
-    horario_laboral: {
-      ...(negActual.horario_laboral || {}),
-      dias: state.diasSeleccionados.length ? state.diasSeleccionados : [1, 2, 3, 4, 5, 6],
-      inicio: $("#cfg-hora-ini").value || "08:00",
-      fin: $("#cfg-hora-fin").value || "18:00",
-      duracion_min: negActual.horario_laboral?.duracion_min || 60,
-    },
+    horario_laboral: horarioPayload,
     reglas_y_faq: {
       ...reglasActuales,
       direccion: $("#cfg-direccion").value,
       metodos_pago: $("#cfg-pagos").value,
       politicas: $("#cfg-politicas").value,
       tono_marca: $("#cfg-tono").value,
+      instrucciones_adicionales: $("#cfg-instrucciones-extra").value,
+      reglas_cotizacion: {
+        ...(reglasActuales.reglas_cotizacion || {}),
+        una_por_categoria: cats,
+        costo_diseno_complejo: Number($("#cfg-diseno-complejo").value || 0),
+        costo_domicilio_minimo: Number($("#cfg-domicilio-min").value || 0),
+        anticipo_porcentaje: Number($("#cfg-anticipo-pct").value || 0),
+        recargo_tarjeta_pct: Number($("#cfg-tarjeta-pct").value || 0),
+        requiere_confirmacion_manual_pago: $("#cfg-confirmacion-manual").checked,
+      },
     },
   };
   if (state.rol === "superadmin") {
@@ -768,30 +811,36 @@ $("#form-crear-negocio").addEventListener("submit", async (ev) => {
   try {
     const servicios = parsearLineasServicios($("#new-servicios-json").value);
     const b = state.onbBorrador || {};
-    await api("/api/admin/negocios", {
-      method: "POST",
-      body: JSON.stringify({
-        id: b.id || null,
-        nombre_negocio: $("#new-nombre").value,
-        rubro: $("#new-rubro").value,
-        moneda: b.moneda || "COP",
-        unidad_cantidad: b.unidad_cantidad || "servicios",
-        telefono_dueno: $("#new-tel-dueno").value,
-        whatsapp_negocio: b.whatsapp_negocio || "",
-        google_calendar_id: b.google_calendar_id || "",
-        pin_dueno: $("#new-pin").value || "1234",
-        horario_laboral: {
-          dias: b.horario_laboral?.dias || [1, 2, 3, 4, 5, 6],
-          inicio: $("#new-hora-ini").value || "09:00",
-          fin: $("#new-hora-fin").value || "19:00",
-          duracion_min: b.horario_laboral?.duracion_min || 60,
-        },
-        reglas_y_faq: {
-          ...(b.reglas_y_faq || {}),
-          metodos_pago: $("#new-pagos").value,
-          direccion: $("#new-direccion").value,
-        },
-        servicios,
+      const bSrv = Array.isArray(b.servicios) ? b.servicios : [];
+      const serviciosConTags = servicios.map((s, idx) => ({
+        ...s,
+        palabras_clave: bSrv[idx]?.palabras_clave || [],
+      }));
+      await api("/api/admin/negocios", {
+        method: "POST",
+        body: JSON.stringify({
+          id: b.id || null,
+          nombre_negocio: $("#new-nombre").value,
+          rubro: $("#new-rubro").value,
+          moneda: b.moneda || "COP",
+          unidad_cantidad: b.unidad_cantidad || "servicios",
+          telefono_dueno: $("#new-tel-dueno").value,
+          whatsapp_negocio: b.whatsapp_negocio || "",
+          google_calendar_id: b.google_calendar_id || "",
+          pin_dueno: $("#new-pin").value || "1234",
+          horario_laboral: {
+            ...(b.horario_laboral || {}),
+            dias: b.horario_laboral?.dias || [1, 2, 3, 4, 5, 6],
+            inicio: $("#new-hora-ini").value || "09:00",
+            fin: $("#new-hora-fin").value || "19:00",
+            duracion_min: b.horario_laboral?.duracion_min || 60,
+          },
+          reglas_y_faq: {
+            ...(b.reglas_y_faq || {}),
+            metodos_pago: $("#new-pagos").value,
+            direccion: $("#new-direccion").value,
+          },
+          servicios: serviciosConTags,
         promociones: (b.promociones || []).map((p) => ({
           codigo: p.codigo,
           descripcion: p.descripcion,

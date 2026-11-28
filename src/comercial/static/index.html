@@ -173,6 +173,10 @@
             <label for="srv-clave">Clave (opcional, se genera sola)</label>
             <input id="srv-clave" type="text" placeholder="manicure_semipermanente" />
           </div>
+          <div class="field">
+            <label for="srv-tags">Categoría / Etiquetas (separadas por coma)</label>
+            <input id="srv-tags" type="text" placeholder="Ej. manos, manicura" />
+          </div>
         </div>
         <div class="field">
           <label for="srv-desc">Descripción exacta (lo que incluye)</label>
@@ -284,6 +288,56 @@
           <label for="cfg-tono">Tono de atención del asistente</label>
           <input id="cfg-tono" type="text" placeholder="Ej. Cálido, amable y profesional" />
         </div>
+
+        <details style="margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-soft);">
+          <summary style="cursor:pointer; font-weight:700;">Reglas avanzadas de agenda, adicionales y anticipos</summary>
+          <div class="form-grid" style="margin-top:12px;">
+            <div class="field">
+              <label for="cfg-pausa-ini">Inicio descanso / almuerzo (opcional)</label>
+              <input id="cfg-pausa-ini" type="time" />
+            </div>
+            <div class="field">
+              <label for="cfg-pausa-fin">Fin descanso / almuerzo (opcional)</label>
+              <input id="cfg-pausa-fin" type="time" />
+            </div>
+            <div class="field">
+              <label for="cfg-buffer-min">Intervalo entre citas (min)</label>
+              <input id="cfg-buffer-min" type="number" min="0" max="120" value="0" />
+            </div>
+            <div class="field">
+              <label for="cfg-max-dias">Anticipación máxima para reservar (días, vacío = sin límite)</label>
+              <input id="cfg-max-dias" type="number" min="0" max="365" placeholder="Ej. 1" />
+            </div>
+            <div class="field">
+              <label for="cfg-diseno-complejo">Adicional diseño complejo</label>
+              <input id="cfg-diseno-complejo" type="number" min="0" step="500" value="0" />
+            </div>
+            <div class="field">
+              <label for="cfg-domicilio-min">Domicilio base desde</label>
+              <input id="cfg-domicilio-min" type="number" min="0" step="500" value="0" />
+            </div>
+            <div class="field">
+              <label for="cfg-anticipo-pct">Anticipo para reservar (%)</label>
+              <input id="cfg-anticipo-pct" type="number" min="0" max="100" step="1" value="0" />
+            </div>
+            <div class="field">
+              <label for="cfg-tarjeta-pct">Recargo pago con tarjeta (%)</label>
+              <input id="cfg-tarjeta-pct" type="number" min="0" max="50" step="0.5" value="0" />
+            </div>
+            <div class="field">
+              <label for="cfg-una-por-cat">Máximo 1 servicio por categoría (separadas por coma)</label>
+              <input id="cfg-una-por-cat" type="text" placeholder="Ej. manos, pies" />
+            </div>
+            <div class="field" style="display:flex; align-items:center; gap:8px; padding-top:22px;">
+              <input id="cfg-confirmacion-manual" type="checkbox" style="width:20px; height:20px;" />
+              <label for="cfg-confirmacion-manual" style="margin:0;">Cita queda pendiente hasta verificar pago</label>
+            </div>
+          </div>
+          <div class="field" style="margin-top:8px;">
+            <label for="cfg-instrucciones-extra">Instrucciones operativas adicionales del asistente</label>
+            <textarea id="cfg-instrucciones-extra" rows="4" placeholder="Reglas especiales de catálogo, retiro, escalamientos, etc."></textarea>
+          </div>
+        </details>
 
         <div class="field">
           <label>Enlace Webhook para Botpress (copiar en tu flujo)</label>
