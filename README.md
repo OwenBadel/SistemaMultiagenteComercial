@@ -43,8 +43,8 @@ FastAPI (src/comercial/servidor_comercial.py)
 ## 2. Base de Datos y Configuración
 
 ### Opción A: Supabase PostgreSQL (recomendada para producción)
-1. Ejecuta el esquema base [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) si el proyecto Supabase es nuevo.
-2. Ejecuta la migración aditiva [`sql/supabase_comercial_v2.sql`](sql/supabase_comercial_v2.sql) en el **SQL Editor** de Supabase. Esta migración habilita Row Level Security (RLS) en todas las tablas públicas, agrega índices únicos parciales por canal (`whatsapp_phone_number_id`, `whatsapp_negocio`, `botpress_bot_id`), añade las columnas multi-negocio (`horario_laboral`, `google_calendar_id`, `pin_dueno_hash`, `reglas_y_faq`, `duracion_minutos`, `updated_at`) y carga las semillas iniciales de `estudio_fotografia` y `salon_belleza`.
+1. **Si tu proyecto Supabase es nuevo:** pega y ejecuta únicamente [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) en el **SQL Editor** de Supabase (crea las 6 tablas con RLS, índices únicos por canal y carga `estudio_fotografia` y `mile_cuentas_beauty`).
+2. **Si ya tenías el esquema antiguo de la versión universitaria:** ejecuta la migración aditiva [`sql/supabase_comercial_v2.sql`](sql/supabase_comercial_v2.sql).
 
 ### Opción B: SQLite local (desarrollo inmediato)
 Si dejas `SUPABASE_URL` y `SUPABASE_KEY` vacías en `.env`, el servidor inicializa automáticamente `data/comercial_multitenant.db` con `estudio_fotografia` y `salon_belleza` precargados.
