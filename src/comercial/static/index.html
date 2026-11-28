@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#1C1917" />
+  <title>Centro Comercial IA — Gestión de Negocios</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-wrap">
+      <img src="/static/icon.svg" alt="Centro Comercial IA" class="brand-icon" />
+      <div class="brand-meta">
+        <span class="brand-name" id="topbar-title">Centro Comercial IA</span>
+        <span class="brand-sub" id="topbar-sub">Panel Multi-Negocio</span>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-volver-hub" class="btn btn-dark hidden" type="button">Todos los negocios</button>
+      <button id="btn-cerrar-sesion" class="btn btn-dark hidden" type="button">Salir</button>
+    </div>
+  </header>
+
+  <!-- VISTA 1: ACCESO -->
+  <main id="vista-login" class="login-wrap">
+    <section class="login-card" aria-label="Inicio de sesion">
+      <h1>Acceso al Panel</h1>
+      <p>Ingresa como dueño de tu negocio para ver chats pausados, agenda y precios, o como administrador general.</p>
+
+      <div class="role-switch" role="tablist">
+        <button type="button" id="rol-btn-dueno" class="active">Dueño de Negocio</button>
+        <button type="button" id="rol-btn-admin">Super-Admin</button>
+      </div>
+
+      <form id="form-login">
+        <div class="field" id="campo-negocio-login">
+          <label for="select-negocio-login">Selecciona tu negocio</label>
+          <select id="select-negocio-login" required></select>
+        </div>
+        <div class="field">
+          <label for="input-clave-login" id="label-clave-login">PIN de acceso del negocio</label>
+          <input id="input-clave-login" type="password" placeholder="Ingresa tu PIN (ej. 1234)" required autocomplete="current-password" />
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">Ingresar al panel</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- VISTA 2: HUB SUPER-ADMIN (TODOS LOS NEGOCIOS) -->
+  <main id="vista-hub" class="page-shell hidden">
+    <section class="hero-bar">
+      <div>
+        <span class="hero-kicker" id="hub-fecha"></span>
+        <h1>Administración Multi-Negocio</h1>
+      </div>
+      <div class="btn-row">
+        <span class="hero-chip"><span class="dot-live"></span><span id="hub-motor">Gemini 2.5 Flash</span></span>
+        <button id="btn-nuevo-negocio" class="btn btn-primary" type="button">+ Nuevo Negocio</button>
+      </div>
+    </section>
+
+    <div class="section-head">
+      <h2 class="section-title">Negocios Activos</h2>
+      <button id="btn-refrescar-hub" class="btn" type="button">Actualizar</button>
+    </div>
+    <section id="hub-negocios-grid" class="cards-grid"></section>
+  </main>
+
+  <!-- VISTA 3: ESPACIO DE TRABAJO DE UN NEGOCIO -->
+  <main id="vista-negocio" class="page-shell hidden">
+    <section class="hero-bar">
+      <div>
+        <span class="hero-kicker" id="neg-rubro"></span>
+        <h1 id="neg-nombre">Negocio</h1>
+      </div>
+      <span class="hero-chip"><span class="dot-live"></span><span id="neg-estado-ia">Asistente Activo</span></span>
+    </section>
+
+    <section class="kpi-grid" aria-label="Indicadores del negocio">
+      <div class="kpi-card">
+        <span class="kpi-label">Chats Pausados</span>
+        <span class="kpi-val danger" id="kpi-pausados">0</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Citas Activas</span>
+        <span class="kpi-val success" id="kpi-citas">0</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Servicios</span>
+        <span class="kpi-val brand" id="kpi-servicios">0</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Promociones</span>
+        <span class="kpi-val" id="kpi-promos">0</span>
+      </div>
+    </section>
+
+    <nav class="tabs-bar" aria-label="Secciones del negocio">
+      <button type="button" class="tab-btn active" data-tab="alertas">Chats Pausados</button>
+      <button type="button" class="tab-btn" data-tab="agenda">Agenda</button>
+      <button type="button" class="tab-btn" data-tab="servicios">Servicios</button>
+      <button type="button" class="tab-btn" data-tab="config">Reglas y Bot</button>
+    </nav>
+
+    <!-- TAB 1: CHATS PAUSADOS -->
+    <section id="tab-alertas">
+      <div class="section-head">
+        <h2 class="section-title">Clientes Esperando Atención Humana</h2>
+        <button id="btn-refrescar-negocio" class="btn" type="button">Actualizar</button>
+      </div>
+      <div id="lista-chats-pausados" class="cards-grid"></div>
+    </section>
+
+    <!-- TAB 2: AGENDA -->
+    <section id="tab-agenda" class="hidden">
+      <div class="section-head">
+        <h2 class="section-title">Citas Confirmadas y Bloqueos</h2>
+      </div>
+      <form id="form-cita-manual" class="card" style="margin-bottom:14px;">
+        <h3 class="card-title">Bloquear horario o registrar cita manual</h3>
+        <div class="form-grid">
+          <div class="field">
+            <label for="cita-fecha-hora">Fecha y hora (YYYY-MM-DD HH:MM)</label>
+            <input id="cita-fecha-hora" type="text" placeholder="2026-12-01 15:00" required />
+          </div>
+          <div class="field">
+            <label for="cita-servicio">Servicio o motivo</label>
+            <input id="cita-servicio" type="text" placeholder="Sesión / Bloqueo personal" required />
+          </div>
+          <div class="field">
+            <label for="cita-cliente">Nombre del cliente</label>
+            <input id="cita-cliente" type="text" placeholder="Laura Gómez" required />
+          </div>
+          <div class="field">
+            <label for="cita-duracion">Duración (min)</label>
+            <input id="cita-duracion" type="number" min="15" max="720" value="60" required />
+          </div>
+        </div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Guardar en Agenda</button>
+        </div>
+      </form>
+      <div id="lista-agendamientos" class="cards-grid"></div>
+    </section>
+
+    <!-- TAB 3: SERVICIOS Y PROMOCIONES -->
+    <section id="tab-servicios" class="hidden">
+      <div class="section-head">
+        <h2 class="section-title">Catálogo de Servicios y Precios</h2>
+      </div>
+      <form id="form-servicio" class="card" style="margin-bottom:14px;">
+        <h3 class="card-title">Agregar o editar servicio</h3>
+        <div class="form-grid">
+          <div class="field">
+            <label for="srv-nombre">Nombre del servicio</label>
+            <input id="srv-nombre" type="text" placeholder="Manicure Semipermanente" required />
+          </div>
+          <div class="field">
+            <label for="srv-precio">Precio</label>
+            <input id="srv-precio" type="number" min="0" step="500" placeholder="45000" required />
+          </div>
+          <div class="field">
+            <label for="srv-duracion">Duración (minutos)</label>
+            <input id="srv-duracion" type="number" min="15" max="720" value="60" required />
+          </div>
+          <div class="field">
+            <label for="srv-clave">Clave (opcional, se genera sola)</label>
+            <input id="srv-clave" type="text" placeholder="manicure_semipermanente" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="srv-desc">Descripción exacta (lo que incluye)</label>
+          <textarea id="srv-desc" placeholder="Describe exactamente qué incluye este servicio para que el asistente nunca invente extras."></textarea>
+        </div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Guardar Servicio</button>
+          <button type="button" id="btn-limpiar-srv" class="btn">Limpiar</button>
+        </div>
+      </form>
+      <div id="lista-servicios" class="cards-grid"></div>
+
+      <div class="section-head">
+        <h2 class="section-title">Promociones Vigentes</h2>
+      </div>
+      <form id="form-promo" class="card" style="margin-bottom:14px;">
+        <div class="form-grid">
+          <div class="field">
+            <label for="promo-codigo">Código</label>
+            <input id="promo-codigo" type="text" placeholder="COMBO_10" required />
+          </div>
+          <div class="field">
+            <label for="promo-desc">Descripción</label>
+            <input id="promo-desc" type="text" placeholder="10% al llevar 2 o más servicios" required />
+          </div>
+          <div class="field">
+            <label for="promo-pct">Descuento máximo (%)</label>
+            <input id="promo-pct" type="number" min="1" max="80" value="10" required />
+          </div>
+          <div class="field">
+            <label for="promo-min">Cantidad mínima</label>
+            <input id="promo-min" type="number" min="1" value="2" required />
+          </div>
+        </div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Guardar Promoción</button>
+        </div>
+      </form>
+      <div id="lista-promos" class="cards-grid"></div>
+    </section>
+
+    <!-- TAB 4: REGLAS, HORARIOS, WHATSAPP Y SIMULADOR -->
+    <section id="tab-config" class="hidden">
+      <div class="section-head">
+        <h2 class="section-title">Horarios, Reglas de Negocio y Conexión WhatsApp</h2>
+      </div>
+      <form id="form-config-negocio" class="card" style="margin-bottom:16px;">
+        <div class="form-grid">
+          <div class="field">
+            <label for="cfg-nombre">Nombre del negocio</label>
+            <input id="cfg-nombre" type="text" required />
+          </div>
+          <div class="field">
+            <label for="cfg-rubro">Rubro / Especialidad</label>
+            <input id="cfg-rubro" type="text" required />
+          </div>
+          <div class="field">
+            <label for="cfg-tel-dueno">WhatsApp personal del dueño (alertas)</label>
+            <input id="cfg-tel-dueno" type="text" placeholder="573001234567" />
+          </div>
+          <div class="field">
+            <label for="cfg-wa-negocio">WhatsApp del negocio</label>
+            <input id="cfg-wa-negocio" type="text" placeholder="573009876543" />
+          </div>
+          <div class="field">
+            <label for="cfg-wa-phone-id">Meta Phone Number ID (opcional)</label>
+            <input id="cfg-wa-phone-id" type="text" placeholder="ID de WhatsApp Cloud API" />
+          </div>
+          <div class="field">
+            <label for="cfg-calendar-id">Google Calendar ID del negocio</label>
+            <input id="cfg-calendar-id" type="text" placeholder="correo@gmail.com" />
+          </div>
+          <div class="field">
+            <label for="cfg-hora-ini">Hora apertura</label>
+            <input id="cfg-hora-ini" type="time" value="08:00" />
+          </div>
+          <div class="field">
+            <label for="cfg-hora-fin">Hora cierre</label>
+            <input id="cfg-hora-fin" type="time" value="18:00" />
+          </div>
+          <div class="field">
+            <label for="cfg-pin">Cambiar PIN de acceso (dejar vacío para conservar)</label>
+            <input id="cfg-pin" type="password" placeholder="Nuevo PIN numérico" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Días laborales</label>
+          <div class="days-row" id="cfg-dias-row"></div>
+        </div>
+
+        <div class="form-grid">
+          <div class="field">
+            <label for="cfg-direccion">Dirección / Ubicación verificada</label>
+            <input id="cfg-direccion" type="text" placeholder="Dirección exacta o 'Servicio a domicilio'" />
+          </div>
+          <div class="field">
+            <label for="cfg-pagos">Métodos de pago aceptados</label>
+            <input id="cfg-pagos" type="text" placeholder="Nequi, Bancolombia, efectivo..." />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="cfg-politicas">Políticas y reglas de negocio (entregas, abonos, cancelaciones)</label>
+          <textarea id="cfg-politicas"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="cfg-tono">Tono de atención del asistente</label>
+          <input id="cfg-tono" type="text" placeholder="Ej. Cálido, amable y profesional" />
+        </div>
+
+        <div class="field">
+          <label>Enlace Webhook para Botpress (copiar en tu flujo)</label>
+          <div class="webhook-box" id="cfg-webhook-url"></div>
+        </div>
+
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Guardar Configuración</button>
+        </div>
+      </form>
+
+      <div class="section-head">
+        <h2 class="section-title">Probar Asistente en Vivo</h2>
+      </div>
+      <section class="card">
+        <p class="card-sub">Simula una conversación real con el asistente de este negocio para verificar precios, horarios y escalamiento.</p>
+        <div id="sim-chat-box" class="chat-box"></div>
+        <form id="form-sim-chat" class="chat-compose">
+          <input id="sim-input" type="text" placeholder="Escribe como si fueras un cliente..." required />
+          <button type="submit" class="btn btn-primary">Enviar</button>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <!-- MODAL: NUEVO NEGOCIO (ASISTENTE IA GEMINI + VISTA PREVIA EDITABLE) -->
+  <div id="modal-onboarding" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="Crear nuevo negocio">
+    <div class="modal-panel">
+      <div class="card-head" style="margin-bottom:14px;">
+        <div>
+          <h2 class="card-title">Crear Nuevo Negocio</h2>
+          <p class="card-sub">Conversa con Gemini (o pega la lista de precios) y revisa la vista previa antes de activar.</p>
+        </div>
+        <button id="btn-cerrar-modal" class="btn" type="button">Cerrar</button>
+      </div>
+
+      <div class="onboarding-split">
+        <section class="card">
+          <h3 class="card-title">1. Asistente de Configuración (Gemini)</h3>
+          <div id="onb-chat-box" class="chat-box">
+            <div class="bubble asistente">Hola. Cuéntame cómo se llama el negocio, qué ofrece, sus precios y horarios (o pega directamente su lista de servicios) y yo relleno el formulario por ti.</div>
+          </div>
+          <form id="form-onb-chat" class="chat-compose">
+            <input id="onb-input" type="text" placeholder="Ej. Pizzería Don Luigi, abrimos de 5pm a 11pm..." required />
+            <button type="submit" class="btn btn-primary">Enviar</button>
+          </form>
+        </section>
+
+        <form id="form-crear-negocio" class="card">
+          <h3 class="card-title">2. Vista Previa Editable</h3>
+          <div class="field">
+            <label for="new-nombre">Nombre del negocio</label>
+            <input id="new-nombre" type="text" placeholder="Ej. Pizzería La Esquina" required />
+          </div>
+          <div class="field">
+            <label for="new-rubro">Rubro</label>
+            <input id="new-rubro" type="text" placeholder="Ej. Restaurante y Domicilios" required />
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="new-tel-dueno">WhatsApp del dueño</label>
+              <input id="new-tel-dueno" type="text" placeholder="573001234567" />
+            </div>
+            <div class="field">
+              <label for="new-pin">PIN de acceso dueño</label>
+              <input id="new-pin" type="text" value="1234" required />
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="new-hora-ini">Apertura</label>
+              <input id="new-hora-ini" type="time" value="09:00" />
+            </div>
+            <div class="field">
+              <label for="new-hora-fin">Cierre</label>
+              <input id="new-hora-fin" type="time" value="19:00" />
+            </div>
+          </div>
+          <div class="field">
+            <label for="new-pagos">Métodos de pago</label>
+            <input id="new-pagos" type="text" placeholder="Nequi, efectivo, transferencia" />
+          </div>
+          <div class="field">
+            <label for="new-direccion">Dirección</label>
+            <input id="new-direccion" type="text" placeholder="Dirección o zona de cobertura" />
+          </div>
+          <div class="field">
+            <label for="new-servicios-json">Servicios detectados (1 por línea: Nombre | Precio | Minutos | Descripción)</label>
+            <textarea id="new-servicios-json" placeholder="Pizza Artesanal Mediana | 35000 | 30 | Masa madre, mozzarella y albahaca"></textarea>
+          </div>
+          <button type="submit" class="btn btn-success" style="width:100%;">Guardar y Activar Negocio</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="/static/app.js" type="module"></script>
+</body>
+</html>

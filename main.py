@@ -1,191 +1,63 @@
 """
-Punto de entrada principal de SistemaMultiagenteComercial.
-
-Ejecuta el servidor productivo unificado:
-1. Servidor XMPP embebido de SPADE (PyJabber) y ciclo de vida de los 5 agentes
-   MAS-ML (AgenteCoordinador, AgenteVentas, AgenteCotizaciones, AgentePromociones
-   y AgenteAgendamientos).
-2. Entorno compartido EntornoVirtualAtencion integrado con Botpress Studio
-   (puente hacia WhatsApp, Webchat, Facebook Messenger e Instagram).
-3. Servidor HTTP FastAPI + Uvicorn con el endpoint para Botpress (/api/botpress/mensaje)
-   y el panel web Human-in-the-Loop y Monitor FIPA-ACL en tiempo real (/).
+Punto de entrada principal de la rama comercial multi-negocio.
+Ejecuta FastAPI + Uvicorn con Gemini 2.5 Flash (Tool Calling), Supabase/SQLite,
+Google Calendar independiente por negocio y Panel PWA movil de alto contraste.
 """
-
 from __future__ import annotations
 
 import argparse
-import asyncio
-import sys
-from pathlib import Path
+from typing import Optional, Sequence
 
-import spade
 import uvicorn
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-RAIZ_PROYECTO = Path(__file__).resolve().parent
-if str(RAIZ_PROYECTO) not in sys.path:
-    sys.path.insert(0, str(RAIZ_PROYECTO))
-
-from src.escenarios.orquestador_escenarios import ServicioMultiagenteComercial
-from src.integracion_botpress.configuracion import ConfiguracionBotpress
-from src.integracion_botpress.servidor_botpress import crear_app_botpress
-from src.ml.motor_llama import asegurar_entorno_llama
+from src.comercial.configuracion import ConfiguracionComercial
+from src.comercial.servidor_comercial import crear_app_comercial, crear_repositorio_comercial
 
 
 def _construir_parser() -> argparse.ArgumentParser:
-    """Construye el analizador de argumentos del servidor."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Servidor productivo SistemaMultiagenteComercial "
-            "(SPADE + Meta Llama/Ollama + Scikit-Learn + Botpress)."
-        )
+        description="Plataforma Comercial Multi-Negocio (Gemini 2.5 Flash + WhatsApp + Panel PWA)"
     )
-    parser.add_argument(
-        "--host",
-        type=str,
-        default=None,
-        help="Direccion IP de escucha HTTP (por defecto usa HOST en .env o 0.0.0.0).",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="Puerto HTTP de escucha (por defecto usa PORT en .env o 8000).",
-    )
-    parser.add_argument(
-        "--local-bus",
-        action="store_true",
-        help="Desactiva el servidor XMPP embebido y usa el bus local FIPA-ACL de respaldo.",
-    )
+    parser.add_argument("--host", default=None, help="Host HTTP de escucha (default: HOST en .env o 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=None, help="Puerto HTTP (default: PORT en .env o 8000)")
     return parser
 
 
-def _imprimir_estado_servidor(
-    consola: Console,
-    config_botpress: ConfiguracionBotpress,
-    servicio: ServicioMultiagenteComercial,
-    usar_xmpp: bool,
-) -> None:
-    """Muestra en consola los endpoints activos para Botpress, BD y Monitor FIPA-ACL."""
-    host_visible = "127.0.0.1" if config_botpress.host == "0.0.0.0" else config_botpress.host
-    cfg_neg = servicio.entorno.config_negocio
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    args = _construir_parser().parse_args(argv)
+    config = ConfiguracionComercial.desde_entorno()
+    host = args.host or config.host
+    port = args.port or config.port
 
-    tabla = Table(show_header=True, header_style="bold cyan")
-    tabla.add_column("Componente", style="bold")
-    tabla.add_column("Estado / Valor")
+    repo = crear_repositorio_comercial(config)
+    app = crear_app_comercial(config=config, repositorio=repo)
 
-    tabla.add_row(
-        "Transporte SPADE",
-        "XMPP Embebido (PyJabber localhost:5222)" if usar_xmpp else "Bus local asyncio",
-    )
-    tabla.add_row("Base de Datos", servicio.repositorio.modo_bd)
-    tabla.add_row("Agenda", servicio.entorno.agendaVirtual.modo)
-    tabla.add_row(
-        "Negocio Activo (BD)",
-        f"{cfg_neg.get('nombre_negocio')} [{servicio.repositorio.negocio_id}]",
-    )
-    tabla.add_row("Panel Web / Monitor FIPA-ACL", f"http://{host_visible}:{config_botpress.port}/")
-    tabla.add_row(
-        "Endpoint Botpress (POST)",
-        f"http://{host_visible}:{config_botpress.port}/api/botpress/mensaje",
-    )
-    tabla.add_row(
-        "Motor Ventas (LLM Local)",
-        servicio.motor_llama.estado_actual()["modo"],
-    )
-    tabla.add_row(
-        "Modelos ML Especialistas",
-        f"RandomForest R2={servicio.modelo_rf.r2_entrenamiento:.4f} | KNN R2={servicio.modelo_knn.r2_entrenamiento:.4f}",
-    )
-    tabla.add_row(
-        "Seguridad API Key (.env)",
-        "ACTIVA" if config_botpress.botpress_api_key else "ABIERTA (Ideal pruebas / ngrok)",
-    )
-    tabla.add_row(
-        "Clave Admin Monitor (.env)",
-        "CONFIGURADA"
-        if config_botpress.human_reactivation_api_key.strip()
-        else "NO CONFIGURADA (Define HUMAN_REACTIVATION_API_KEY en .env para abrir /api/estado)",
-    )
-
-    consola.print(
-        Panel(
-            tabla,
-            title="SistemaMultiagenteComercial - Servicio Activo",
-            subtitle="SPADE + Meta Llama (Ollama) + Scikit-Learn (RF/KNN) + Botpress + Supabase + Google Calendar",
-            border_style="cyan",
-        )
-    )
-
-
-async def _ejecutar_servidor(
-    config_botpress: ConfiguracionBotpress,
-    usar_xmpp_embebido: bool,
-) -> None:
-    """Aprovisiona Llama local, inicializa los 5 agentes SPADE y sirve FastAPI + Uvicorn."""
     consola = Console()
-    estado_llama = asegurar_entorno_llama(
-        host=config_botpress.ollama_host,
-        modelo=config_botpress.llama_model,
-        auto_instalar=config_botpress.llama_auto_install,
-        consola=consola,
-    )
-    if estado_llama.get("disponible"):
-        config_botpress.llama_model = str(estado_llama["modelo"])
-    else:
+    tabla = Table(show_header=False, box=None, padding=(0, 2))
+    tabla.add_column("Campo", style="bold cyan")
+    tabla.add_column("Valor", style="white")
+    tabla.add_row("Panel PWA (Admin y Duenos)", f"http://127.0.0.1:{port}/")
+    tabla.add_row("Webhook Botpress Multi-Negocio", f"POST http://127.0.0.1:{port}/api/webhook/{{negocio_id}}")
+    tabla.add_row("Webhook Meta WhatsApp Cloud API", f"GET/POST http://127.0.0.1:{port}/api/whatsapp/webhook")
+    tabla.add_row("Base de Datos", repo.modo_bd)
+    tabla.add_row("Negocios Activos", str(len(repo.listar_negocios())))
+    tabla.add_row("Motor IA", f"{config.gemini_model} ({'ACTIVO' if config.usa_gemini else 'Falta GEMINI_API_KEY'})")
+    consola.print(Panel(tabla, title="Plataforma Comercial Multi-Negocio", border_style="bright_yellow"))
+
+    avisos = config.advertencias_seguridad()
+    if avisos:
         consola.print(
-            f"[yellow]Aviso Llama local: {estado_llama.get('detalle', 'Ollama no disponible')}[/yellow]"
+            Panel(
+                "\n".join(f"- {a}" for a in avisos),
+                title="Advertencias de Seguridad",
+                border_style="bold red",
+            )
         )
 
-    servicio = ServicioMultiagenteComercial(
-        config_botpress=config_botpress,
-        usar_xmpp_embebido=usar_xmpp_embebido,
-        consola=consola,
-        silencioso=False,
-    )
-
-    await servicio.iniciar()
-    _imprimir_estado_servidor(consola, config_botpress, servicio, usar_xmpp_embebido)
-
-    app = crear_app_botpress(servicio)
-    uvicorn_config = uvicorn.Config(
-        app=app,
-        host=config_botpress.host,
-        port=config_botpress.port,
-        log_level="info",
-    )
-    server = uvicorn.Server(uvicorn_config)
-
-    try:
-        await server.serve()
-    finally:
-        await servicio.detener()
-
-
-def main() -> None:
-    """Punto de entrada principal sin simulaciones ni menus por consola."""
-    parser = _construir_parser()
-    args = parser.parse_args()
-
-    config_botpress = ConfiguracionBotpress.desde_entorno(RAIZ_PROYECTO / ".env")
-    if args.host:
-        config_botpress.host = args.host
-    if args.port:
-        config_botpress.port = args.port
-
-    usar_xmpp = not args.local_bus
-    try:
-        if usar_xmpp:
-            spade.run(
-                _ejecutar_servidor(config_botpress, usar_xmpp_embebido=True),
-                embedded_xmpp_server=True,
-            )
-        else:
-            asyncio.run(_ejecutar_servidor(config_botpress, usar_xmpp_embebido=False))
-    except KeyboardInterrupt:
-        print("\nServidor detenido por el operador.")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

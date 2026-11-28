@@ -1,0 +1,17 @@
+{
+  "name": "Centro Comercial IA — Gestión de Negocios",
+  "short_name": "Centro IA",
+  "description": "Panel móvil para gestionar chats pausados, agenda, precios y reglas de tu asistente de WhatsApp.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F6F4F0",
+  "theme_color": "#1C1917",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,104 +1,125 @@
-# SistemaMultiagenteComercial
+# SistemaMultiagenteComercial — Plataforma Comercial Multi-Negocio (`comercial`)
 
-Sistema multiagente comercial en Python construido con **SPADE**, **Meta Llama local (Ollama)**, **Scikit-Learn**, **FastAPI**, **Supabase**, **Google Calendar API v3** y **Botpress**. Disenado para operar de forma generica con cualquier trabajador independiente o negocio leyendo su catalogo, reglas comerciales, precios historicos y configuracion directamente desde base de datos en la nube.
+Plataforma SaaS comercial multi-negocio para atención automatizada por WhatsApp, cotización determinista, agendamiento real en Google Calendar y supervisión humana desde un panel móvil instalable (PWA). Construida en Python con **FastAPI**, **Google Gemini 2.5 Flash** (`google-genai` con Tool Calling nativo), **Supabase PostgreSQL / SQLite**, **Google Calendar API v3** y compatibilidad dual con **Botpress Studio** y **Meta WhatsApp Cloud API**.
+
+> **Nota sobre ramas:** La rama `main` conserva intacta la arquitectura académica original (SPADE + Llama local + Scikit-Learn). Esta rama `comercial` implementa la arquitectura de producción multi-negocio sobre un único servidor.
 
 ---
 
-## 1. Como Funciona el Proyecto
+## 1. Arquitectura General
 
 ```text
-Cliente (WhatsApp / Webchat / Instagram / Messenger)
-  -> Botpress (pasarela de canales y alertas salientes al dueno)
-  -> POST /api/botpress/mensaje (FastAPI)
-  -> ServicioMultiagenteComercial (5 agentes SPADE sobre XMPP embebido)
-       |-- EntornoVirtualAtencion <-> Supabase PostgreSQL (negocio, catalogo, ML, perfiles, citas y alertas)
-       |-- EntornoVirtualAtencion <-> Google Calendar API v3 (disponibilidad y citas reales)
-  <- JSON { respuesta, responder_al_cliente, pausado_humano, notificar_dueno, ... }
+Clientes WhatsApp (Negocio A: Fotografia, Negocio B: Belleza, Negocio N: Pizzeria...)
+  |
+  +--> Botpress Studio:           POST /api/webhook/{negocio_id}  (o POST /api/botpress/mensaje)
+  +--> Meta WhatsApp Cloud API:   GET/POST /api/whatsapp/webhook  (enrutamiento automatico por numero)
+  |
+  v
+FastAPI (src/comercial/servidor_comercial.py)
+  |-- Aislamiento estricto por negocio_id (reglas, catalogo, horarios, agenda, chats y dueno)
+  |-- OrquestadorComercialGemini (Gemini 2.5 Flash + 5 herramientas deterministas)
+  |     1. consultar_servicios
+  |     2. calcular_cotizacion
+  |     3. consultar_horarios_disponibles (horarios por dia + Google Calendar + BD)
+  |     4. agendar_cita (bloqueo anti-traslape + Google Calendar API v3)
+  |     5. escalar_a_humano (pausa silenciosa por chat + alerta WhatsApp al dueno)
+  |-- Panel Web Movil PWA (GET /)
+        |-- Rol Dueno (acceso con PIN personal, solo ve su negocio)
+        |-- Rol Administrador (gestion total + asistente conversacional Gemini para alta de negocios)
 ```
 
-1. **Atencion multicanal via Botpress:** Todo mensaje entrante de un cliente llega al endpoint `POST /api/botpress/mensaje`.
-2. **Negocio 100% definido por base de datos:** Al iniciar, el sistema carga desde Supabase (`NEGOCIO_ID`) el rubro, moneda, unidad de cobro (`horas`, `sesiones`, etc.), catalogo de servicios, palabras clave, margenes minimos y topes de descuento.
-3. **Procesamiento colaborativo en SPADE + Llama Local + Scikit-Learn:** `AgenteVentas` utiliza un modelo generativo local **Meta Llama** (vía Ollama con salidas estructuradas JSON Schema) para comprender la intención, tono y parámetros del cliente y redactar respuestas naturales sin depender de claves en la nube ni cuotas HTTP 429; `AgenteCotizaciones` liquida presupuestos (tarifario por sesiones, motor de economía unitaria anti-pérdida y `RandomForestRegressor` para proyectos por horas); `AgentePromociones` calcula incentivos con `KNeighborsRegressor`; `AgenteAgendamientos` consulta/reserva citas reales en Google Calendar + Supabase; y `AgenteCoordinador` ejecuta control **Human-in-the-Loop** por chat cuando detecta un caso crítico.
-4. **Control Human-in-the-Loop aislado por chat:** Si un cliente entra en atencion humana, el sistema pausa unicamente ese `id_cliente`, marca `notificar_dueno: true` para que Botpress avise al WhatsApp personal del dueno, y devuelve `responder_al_cliente: false` en mensajes posteriores mientras el dueno responde desde su WhatsApp corporativo. Desde el monitor web (`GET /`) se puede reactivar la automatizacion al terminar.
+### Capacidades principales
+
+1. **Multi-negocio en una sola instancia:** Dos o más negocios (`estudio_fotografia`, `salon_belleza` o cualquier rubro nuevo) operan simultáneamente con separación total de números de WhatsApp, dueños, catálogos, horarios laborales por día, promociones, reglas de atención, calendarios y chats.
+2. **Motor Gemini 2.5 Flash con herramientas deterministas:** El modelo comprende lenguaje natural libre sin depender de palabras clave rígidas, mientras todos los precios, cálculos, horarios y reservas se ejecutan mediante herramientas deterministas conectadas a la base de datos.
+3. **Escalamiento humano por chat con notificación al dueño:** Cuando un cliente requiere atención personal (reclamos, pedidos fuera de catálogo o solicitud explícita de hablar con una persona), se pausa únicamente ese chat, se envía una alerta al WhatsApp personal del dueño con un resumen breve y enlace directo `wa.me`, y el caso aparece en la bandeja del panel PWA para reactivar el asistente cuando corresponda.
+4. **Alta de nuevos negocios sin tocar código:** Desde el panel de Administrador, un asistente conversacional guiado por Gemini entrevista al operador o al dueño (rubro, servicios, precios, duración, horarios, promociones y números de WhatsApp), rellena automáticamente un formulario editable y crea el negocio listo para operar.
+5. **Panel PWA móvil instalable:** Diseñado con enfoque mobile-first, instalable en Android y iOS desde el navegador, con simulador de chat integrado por negocio.
 
 ---
 
-## 2. Agentes, Capacidades, Arquitectura y Modelos de IA
+## 2. Base de Datos y Configuración
 
-| Agente | Rol | Que es capaz de hacer | Arquitectura | Motor de IA / Machine Learning |
-| :--- | :--- | :--- | :--- | :--- |
-| `AgenteVentas` | `EjecutivoVentas` | Unica puerta conversacional con el cliente. Interpreta mensajes en contexto, detecta tono (`interesado`, `indeciso`, `hostil`), extrae parametros dinamicamente segun el catalogo de BD, pre-perfila datos faltantes, envia el portafolio y redacta respuestas naturales con validador anti-alucinacion. | Generativo local (LLM Llama / Ollama) y basado en utilidad | **Meta Llama Local via Ollama** (`llama3.1:8b` en GPU >= 6 GB VRAM o `llama3.2:3b` en CPU) con **Structured Outputs (JSON Schema)** para NLU + redaccion NLG local (auto-instalacion automatica en arranque) |
-| `AgenteCoordinador` | `Coordinador` | Orquesta turnos entre especialistas, enruta peticiones, audita propuestas comerciales y descuentos frente al margen minimo anti-perdida configurado en BD y suspende la automatizacion de un chat escalandolo al dueno ante casos criticos. | Basado en utilidad | Evaluacion racional de utilidad y piso minimo de rentabilidad sobre margenes configurados en BD |
-| `AgenteCotizaciones` | `LiquidadorCotizaciones` | Valida requisitos obligatorios segun el servicio solicitado (pidiendo aclaraciones si faltan datos) y calcula cotizaciones formales con desglose economico usando tarifa por sesiones, economia unitaria anti-perdida (solicitudes a medida/fraccionadas) o el historico del negocio. | Con aprendizaje y basado en metas | **RandomForestRegressor** (Scikit-Learn) entrenado con `tarifas_historicas` (servicios por horas) + tarifa configurada y motor unitario anti-perdida (sesiones) |
-| `AgentePromociones` | `AnalistaPromociones` | Evalua promociones vigentes y propone el porcentaje optimo de descuento ante objeciones de precio, equilibrando probabilidad de cierre y margen de ganancia. | Con aprendizaje y basado en utilidad | **KNeighborsRegressor (KNN)** con `StandardScaler` (Scikit-Learn) sobre `historico_ofertas` |
-| `AgenteAgendamientos` | `GestorAgenda` | Verifica disponibilidad real en la agenda del dueno, propone horarios libres alternativos del dia si el bloque esta ocupado y crea la cita confirmada en calendario. | Basado en metas | Integracion directa con **Google Calendar API v3** (`freeBusy` y `events.insert`) |
+### Opción A: Supabase PostgreSQL (recomendada para producción)
+1. Ejecuta el esquema base [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) si el proyecto Supabase es nuevo.
+2. Ejecuta la migración aditiva [`sql/supabase_comercial_v2.sql`](sql/supabase_comercial_v2.sql) en el **SQL Editor** de Supabase. Esta migración habilita Row Level Security (RLS) en todas las tablas públicas, agrega índices únicos parciales por canal (`whatsapp_phone_number_id`, `whatsapp_negocio`, `botpress_bot_id`), añade las columnas multi-negocio (`horario_laboral`, `google_calendar_id`, `pin_dueno_hash`, `reglas_y_faq`, `duracion_minutos`, `updated_at`) y carga las semillas iniciales de `estudio_fotografia` y `salon_belleza`.
 
----
-
-## 3. Configuracion (Supabase, Google Calendar y Botpress)
-
-### Base de datos en la nube (Supabase)
-1. Crea un proyecto en `https://supabase.com/`.
-2. En **SQL Editor -> New query**, pega y ejecuta [`sql/supabase_schema_y_seed.sql`](sql/supabase_schema_y_seed.sql) (crea las 8 tablas: `negocios`, `servicios`, `promociones_vigentes`, `tarifas_historicas`, `historico_ofertas`, `perfiles_clientes`, `alertas_humanas` y `agendamientos`, e incluye los negocios de ejemplo `tech_freelance` y `estudio_fotografia`).
-3. En **Project Settings -> Data API / API Keys**, copia tu **Project URL** (`https://...supabase.co`) y tu **Secret key** (`sb_secret_...`).
-
-### Agenda real (Google Calendar API v3)
-1. En **Google Cloud Console**, habilita **Google Calendar API**, crea una **Service Account** y descarga su archivo JSON (ej. `google_service_account.json` en la raiz del proyecto).
-2. En **Google Calendar**, comparte el calendario del dueno con el `client_email` del JSON otorgando permiso **"Hacer cambios en eventos"**.
+### Opción B: SQLite local (desarrollo inmediato)
+Si dejas `SUPABASE_URL` y `SUPABASE_KEY` vacías en `.env`, el servidor inicializa automáticamente `data/comercial_multitenant.db` con `estudio_fotografia` y `salon_belleza` precargados.
 
 ### Variables de entorno (`.env`)
-Copia `.env.example` como `.env` y completa tus credenciales:
+Copia `.env.example` como `.env` y completa tus claves:
 
 ```env
-SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_KEY=tu_secret_key
-NEGOCIO_ID=tech_freelance
+GEMINI_API_KEY=tu_api_key_de_google_ai_studio
+GEMINI_MODEL=gemini-2.5-flash
 
-GOOGLE_CALENDAR_ID=tu_correo@gmail.com
+SUPABASE_URL=
+SUPABASE_KEY=
+SQLITE_DB_PATH=data/comercial_multitenant.db
+NEGOCIO_ID=estudio_fotografia
+
 GOOGLE_SERVICE_ACCOUNT_JSON=google_service_account.json
 GOOGLE_TIMEZONE=America/Bogota
 
-OWNER_WHATSAPP_NUMBER=573001234567
-BOTPRESS_API_KEY=
-HUMAN_REACTIVATION_API_KEY=admin_sma_2026
-OLLAMA_HOST=http://127.0.0.1:11434
-LLAMA_MODEL=auto
-LLAMA_AUTO_INSTALL=true
+ADMIN_ACCESS_KEY=reemplaza_con_clave_admin_fuerte
+SESSION_SECRET=reemplaza_con_secreto_largo_aleatorio
+PUBLIC_BASE_URL=https://tu-dominio.com
+
+BOTPRESS_API_KEY=reemplaza_con_api_key_webhook
+WHATSAPP_VERIFY_TOKEN=sma_whatsapp_verify_2026
+WHATSAPP_APP_SECRET=reemplaza_con_app_secret_de_meta
+WHATSAPP_ACCESS_TOKEN=
+ALLOW_INSECURE_WEBHOOKS=false
+
 HOST=0.0.0.0
 PORT=8000
 ```
 
-Las reservas se guardan en `public.agendamientos`. Sin Google Calendar configurado, la cita se persiste en Supabase con `registrado_en='solo_supabase'` y `google_calendar_estado='no_configurado'`. Si Google está configurado pero no se puede validar su disponibilidad, la solicitud queda persistida como `pendiente` y no se confirma al cliente. Si Google valida el horario pero falla al crear el evento, se confirma solo después de guardar la cita en Supabase y queda registrada con `google_calendar_estado='error'`.
-
-Si no configuras `SUPABASE_URL` y `SUPABASE_KEY`, el proyecto usa SQLite local persistente para desarrollo. En ese modo, las citas se conservan en SQLite; para producción y almacenamiento en `public.agendamientos`, configura Supabase.
-
-Al solicitar una cita se entienden fechas relativas como “hoy”, “mañana”, “pasado mañana”, “ayer”, “en/dentro de N días”, expresiones de día del mes (“el 30 a las 3pm”) y horarios como “mediodía”, calculados en `America/Bogota`. Si solo se indica el día sin hora, el agente conserva la fecha parcial y pregunta explícitamente la hora deseada en vez de asumir una por defecto; las fechas pasadas no se reservan y se solicita una fecha futura. Si no se reconoce ninguna fecha, el agente pide aclaración en vez de asignar una fecha por defecto.
-
-Si Google Calendar crea un evento, pero Supabase no puede confirmar el estado sincronizado, la cita queda pendiente con el identificador del evento para reconciliación manual; el agente no confirma al cliente ni elimina automáticamente el evento. Las citas pendientes bloquean el horario, así que no se debe reintentar la sincronización hasta revisar el registro y ese ID en ambas fuentes. Si tampoco se puede guardar el marcador de recuperación en Supabase, el ID del evento se deja en el log para revisión manual.
+> **Seguridad en producción:**
+> - El PIN inicial precargado para dueños de ejemplo es `1234` (tanto en SQLite como en `sql/supabase_comercial_v2.sql`). Cámbialo desde la pestaña **Reglas y Bot** antes de salir a producción (al cambiarlo se revocan automáticamente sesiones anteriores).
+> - Los webhooks externos operan en modo **fail-closed**: si `BOTPRESS_API_KEY` o `WHATSAPP_APP_SECRET` están vacías, responden `503` salvo que actives `ALLOW_INSECURE_WEBHOOKS=true` exclusivamente para pruebas locales.
 
 ---
 
-## 4. Instalacion, Ejecucion y Pruebas
+## 3. Ejecución y Pruebas
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-Servicios disponibles al arrancar:
-- Monitor de Telemetria en Tiempo Real y Supervisión Human-in-the-Loop: `http://127.0.0.1:8000/`
-- Endpoint para Botpress Studio: `POST http://127.0.0.1:8000/api/botpress/mensaje` (exponible con `ngrok http 8000`)
+Accesos al iniciar el servidor:
+- **Panel PWA (Dueños y Administrador):** `http://127.0.0.1:8000/`
+- **Webhook Botpress por negocio:** `POST http://127.0.0.1:8000/api/webhook/{negocio_id}`
+- **Webhook Botpress compatible:** `POST http://127.0.0.1:8000/api/botpress/mensaje`
+- **Webhook Meta WhatsApp Cloud API:** `GET/POST http://127.0.0.1:8000/api/whatsapp/webhook`
+- **Salud del servicio:** `GET http://127.0.0.1:8000/health`
 
-Pruebas automatizadas:
+Ejecución de pruebas automatizadas de la plataforma comercial:
 
 ```bash
-pytest -v
+pytest tests/test_comercial_multitenant.py -v
 ```
+
+---
+
+## 4. Integración con WhatsApp
+
+### Con Botpress Studio
+- Crea un bot por negocio (o un flujo enrutado) apuntando al webhook `POST https://tu-servidor/api/webhook/{negocio_id}`.
+- Envía tu clave `BOTPRESS_API_KEY` mediante el encabezado `X-Botpress-Key` (también se acepta `X-Api-Key` o `Authorization: Bearer`).
+- El servidor responde `{ respuesta, responder_al_cliente, pausado_humano, notificar_dueno, telefono_dueno, mensaje_notificacion_dueno, enlace_whatsapp_cliente, enlace_panel_dueno }`.
+
+### Con Meta WhatsApp Cloud API directa
+- Configura el webhook en Meta for Developers hacia `https://tu-servidor/api/whatsapp/webhook` usando `WHATSAPP_VERIFY_TOKEN` y `WHATSAPP_APP_SECRET` (validación obligatoria `X-Hub-Signature-256`).
+- Registra desde el panel de Super-Admin el `whatsapp_phone_number_id` de cada negocio (y opcionalmente su `whatsapp_access_token` propio o usa el global `WHATSAPP_ACCESS_TOKEN`).
+- El servidor identifica automáticamente a qué negocio pertenece cada mensaje entrante, responde al cliente vía Graph API v21.0 y, ante un escalamiento, envía la alerta directa al WhatsApp personal del dueño.
 
 ---
 
 ## @Authors
 
-- **Owen Badel**
+- **Owen Badel Hooker**
 - **Maverick Diaz**
 - **Jesus Viloria**
